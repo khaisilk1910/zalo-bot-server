@@ -3,7 +3,8 @@
   "version": "1.0.6",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "node scripts/patch-zca-cookie.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

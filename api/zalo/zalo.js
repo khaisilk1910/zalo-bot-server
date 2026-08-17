@@ -2324,6 +2324,29 @@ function describeProxy(proxy) {
     }
 }
 
+// zca-js <= 2.1.1 needs a real getSetCookie() implementation to keep
+// individual Set-Cookie headers intact. node-fetch exposes them through raw().
+// This is used only when a proxy is configured; native Node fetch is preferred
+// for direct connections.
+async function proxyFetchWithSetCookie(...args) {
+    const response = await nodefetch(...args);
+    const headers = response?.headers;
+
+    if (headers && typeof headers.getSetCookie !== 'function' && typeof headers.raw === 'function') {
+        const getSetCookie = () => headers.raw()?.['set-cookie'] || [];
+        try {
+            Object.defineProperty(headers, 'getSetCookie', {
+                value: getSetCookie,
+                configurable: true
+            });
+        } catch {
+            headers.getSetCookie = getSetCookie;
+        }
+    }
+
+    return response;
+}
+
 export async function loginZaloAccount(customProxy, cred, options = {}) {
     const {
         allowQrFallback = true,
@@ -2422,8 +2445,11 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
             zalo = new Zalo({
                 selfListen: true,
                 agent: agent,
+                // node-fetch is required for HttpsProxyAgent, but it does not expose
+                // Headers.getSetCookie(). Add it from headers.raw() so QR cookies
+                // such as zpsid/zpw_sek are not corrupted after confirmation.
                 // @ts-ignore
-                polyfill: nodefetch,
+                polyfill: proxyFetchWithSetCookie,
                 imageMetadataGetter: getImageMetadata
             });
         } else {
@@ -2433,6 +2459,29 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
                 imageMetadataGetter: getImageMetadata
             });
         }
+
+        let qrCodeDelivered = false;
+        const handleQrLoginEvent = (qrData) => {
+            const image = qrData?.data?.image;
+            if (image) {
+                // loginQR uses the same callback for QR generation and later status
+                // events. Only the QRCodeGenerated event contains data.image.
+                if (!qrCodeDelivered) {
+                    qrCodeDelivered = true;
+                    const qrCodeImage = `data:image/png;base64,${image}`;
+                    console.log('Đã tạo mã QR, độ dài:', qrCodeImage.length);
+                    resolve(qrCodeImage);
+                }
+                return;
+            }
+
+            // A callback without image is a normal login state transition
+            // (scan/confirm/login info), not a QR generation failure.
+            if (process.env.DEBUG_LOGIN === 'true') {
+                const eventType = qrData?.type ?? qrData?.event ?? qrData?.data?.type ?? 'status';
+                console.log('[LoginQR] Trạng thái SDK:', eventType);
+            }
+        };
 
         let api;
         try {
@@ -2450,31 +2499,11 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
                     }
 
                     console.log('Cookie không sử dụng được, chuyển sang đăng nhập bằng mã QR...');
-                    api = await zalo.loginQR(null, (qrData) => {
-                        console.log('Đã nhận dữ liệu QR:', qrData ? 'có dữ liệu' : 'không có dữ liệu');
-                        if (qrData?.data?.image) {
-                            const qrCodeImage = `data:image/png;base64,${qrData.data.image}`;
-                            console.log('Đã tạo mã QR, độ dài:', qrCodeImage.length);
-                            resolve(qrCodeImage);
-                        } else {
-                            console.error('Không thể lấy mã QR từ Zalo SDK');
-                            reject(new Error("Không thể lấy mã QR"));
-                        }
-                    });
+                    api = await zalo.loginQR(null, handleQrLoginEvent);
                 }
             } else {
                 console.log('Đang tạo mã QR để đăng nhập...');
-                api = await zalo.loginQR(null, (qrData) => {
-                    console.log('Đã nhận dữ liệu QR:', qrData ? 'có dữ liệu' : 'không có dữ liệu');
-                    if (qrData?.data?.image) {
-                        const qrCodeImage = `data:image/png;base64,${qrData.data.image}`;
-                        console.log('Đã tạo mã QR, độ dài:', qrCodeImage.length);
-                        resolve(qrCodeImage);
-                    } else {
-                        console.error('Không thể lấy mã QR từ Zalo SDK');
-                        reject(new Error("Không thể lấy mã QR"));
-                    }
-                });
+                api = await zalo.loginQR(null, handleQrLoginEvent);
             }
 
             console.log('Thiết lập event listeners');
