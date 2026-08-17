@@ -19,6 +19,7 @@
   </head>
   <body>
     <h1>Tài liệu API Zalo Server</h1>
+    <p><strong>Base URL hiện tại:</strong> <code><%= baseUrl %></code></p>
     <h2>Mục lục</h2>
 
     <h3>📋 APIs Quản lý Tài khoản</h3>
@@ -87,7 +88,7 @@
     </pre>
     <p><strong>Ví dụ curl:</strong></p>
     <pre>
-curl http://localhost:3000/api/accounts
+curl <%= baseUrl %>/api/accounts
     </pre>
 
     <hr/>
@@ -123,7 +124,7 @@ curl http://localhost:3000/api/accounts
     </pre>
     <p><strong>Ví dụ curl:</strong></p>
     <pre>
-curl http://localhost:3000/api/accounts/123456789
+curl <%= baseUrl %>/api/accounts/123456789
     </pre>
 
     <hr/>
@@ -174,7 +175,7 @@ curl http://localhost:3000/api/accounts/123456789
 curl -X POST -H "Content-Type: application/json" -d '{
   "phone": "0987654321",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/findUserByAccount
+}' <%= baseUrl %>/api/findUserByAccount
     </pre>
 
     <hr/>
@@ -206,7 +207,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "threadId": "user_thread_id",
   "type": "user",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/sendMessageByAccount
+}' <%= baseUrl %>/api/sendMessageByAccount
     </pre>
 
     <hr/>
@@ -238,7 +239,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "threadId": "user_thread_id",
   "type": "user",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/sendImageByAccount
+}' <%= baseUrl %>/api/sendImageByAccount
     </pre>
 
     <hr/>
@@ -250,7 +251,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
 curl -X POST -H "Content-Type: application/json" -d '{
   "userId": "user_id_here",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/getUserInfoByAccount
+}' <%= baseUrl %>/api/getUserInfoByAccount
     </pre>
 
     <h4>sendFriendRequestByAccount</h4>
@@ -259,7 +260,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "userId": "user_id_here",
   "message": "Xin chào, hãy kết bạn với tôi!",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/sendFriendRequestByAccount
+}' <%= baseUrl %>/api/sendFriendRequestByAccount
     </pre>
 
     <h4>createGroupByAccount</h4>
@@ -268,7 +269,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "members": ["user_id_1", "user_id_2"],
   "name": "Tên nhóm mới",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/createGroupByAccount
+}' <%= baseUrl %>/api/createGroupByAccount
     </pre>
 
     <h4>getGroupInfoByAccount</h4>
@@ -276,7 +277,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
 curl -X POST -H "Content-Type: application/json" -d '{
   "groupId": "group_id_here",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/getGroupInfoByAccount
+}' <%= baseUrl %>/api/getGroupInfoByAccount
     </pre>
 
     <h4>addUserToGroupByAccount</h4>
@@ -285,7 +286,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "groupId": "group_id_here",
   "memberId": "user_id_here",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/addUserToGroupByAccount
+}' <%= baseUrl %>/api/addUserToGroupByAccount
     </pre>
 
     <h4>removeUserFromGroupByAccount</h4>
@@ -294,7 +295,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "groupId": "group_id_here",
   "memberId": "user_id_here",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/removeUserFromGroupByAccount
+}' <%= baseUrl %>/api/removeUserFromGroupByAccount
     </pre>
 
     <h4>sendImageToUserByAccount</h4>
@@ -303,7 +304,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "imagePath": "https://example.com/image.jpg",
   "threadId": "user_id_here",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/sendImageToUserByAccount
+}' <%= baseUrl %>/api/sendImageToUserByAccount
     </pre>
 
     <h4>sendImagesToUserByAccount</h4>
@@ -312,7 +313,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "imagePaths": ["https://example.com/image1.jpg", "https://example.com/image2.jpg"],
   "threadId": "user_id_here",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/sendImagesToUserByAccount
+}' <%= baseUrl %>/api/sendImagesToUserByAccount
     </pre>
 
     <h4>sendImageToGroupByAccount</h4>
@@ -321,7 +322,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "imagePath": "https://example.com/image.jpg",
   "threadId": "group_id_here",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/sendImageToGroupByAccount
+}' <%= baseUrl %>/api/sendImageToGroupByAccount
     </pre>
 
     <h4>sendImagesToGroupByAccount</h4>
@@ -330,7 +331,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "imagePaths": ["https://example.com/image1.jpg", "https://example.com/image2.jpg"],
   "threadId": "group_id_here",
   "accountSelection": "0901234567"
-}' http://localhost:3000/api/sendImagesToGroupByAccount
+}' <%= baseUrl %>/api/sendImagesToGroupByAccount
     </pre>
 
     <p><strong>🔥 Ưu điểm của APIs *ByAccount:</strong></p>
@@ -354,27 +355,27 @@ curl -X POST -H "Content-Type: application/json" -d '{
     <p><strong>Test cơ bản với curl:</strong></p>
     <pre>
 # 1. Lấy danh sách tài khoản
-curl http://localhost:3000/api/accounts
+curl <%= baseUrl %>/api/accounts
 
 # 2. Gửi tin nhắn test
 curl -X POST -H "Content-Type: application/json" -d '{
   "message": "Test message from API",
   "threadId": "YOUR_THREAD_ID",
   "accountSelection": "YOUR_PHONE_NUMBER"
-}' http://localhost:3000/api/sendMessageByAccount
+}' <%= baseUrl %>/api/sendMessageByAccount
 
 # 3. Tìm user
 curl -X POST -H "Content-Type: application/json" -d '{
   "phone": "TARGET_PHONE_NUMBER",
   "accountSelection": "YOUR_PHONE_NUMBER"
-}' http://localhost:3000/api/findUserByAccount
+}' <%= baseUrl %>/api/findUserByAccount
 
 # 4. Gửi hình ảnh
 curl -X POST -H "Content-Type: application/json" -d '{
   "imagePath": "https://example.com/test-image.jpg",
   "threadId": "YOUR_THREAD_ID",
   "accountSelection": "YOUR_PHONE_NUMBER"
-}' http://localhost:3000/api/sendImageByAccount
+}' <%= baseUrl %>/api/sendImageByAccount
     </pre>
 
     <p><strong>💡 Lưu ý khi test:</strong></p>
@@ -382,7 +383,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
         <li>Thay <code>YOUR_PHONE_NUMBER</code> bằng số điện thoại từ response của <code>/api/accounts</code></li>
         <li>Thay <code>YOUR_THREAD_ID</code> bằng ID người dùng hoặc nhóm thực tế</li>
         <li>Thay <code>TARGET_PHONE_NUMBER</code> bằng số điện thoại cần tìm</li>
-        <li>Đảm bảo server đang chạy trên port 3000</li>
+        <li>Đảm bảo server có thể truy cập tại <code><%= baseUrl %></code></li>
         <li>Kiểm tra response có field <code>usedAccount</code> để xác nhận account đã sử dụng</li>
     </ul>
 
@@ -423,7 +424,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
 curl -X POST -H "Content-Type: application/json" -d '{
   "phone": "0123456789",
   "ownId": "0000000000000000001"
-}' http://localhost:3000/api/findUser
+}' <%= baseUrl %>/api/findUser
     </pre>
 
     <hr/>
@@ -459,7 +460,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
 curl -X POST -H "Content-Type: application/json" -d '{
   "userId": "0000000000000000001",
   "ownId": "0000000000000000009"
-}' http://localhost:3000/api/getUserInfo
+}' <%= baseUrl %>/api/getUserInfo
     </pre>
 
     <hr/>
@@ -495,7 +496,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
 curl -X POST -H "Content-Type: application/json" -d '{
   "userId": "0000000000000000002",
   "ownId": "0000000000000000001"
-}' http://localhost:3000/api/sendFriendRequest
+}' <%= baseUrl %>/api/sendFriendRequest
     </pre>
 
     <hr/>
@@ -547,7 +548,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "threadId": "0000000000000000001",
   "type": 0,
   "ownId": "0000000000000000009"
-}' http://localhost:3000/api/sendmessage
+}' <%= baseUrl %>/api/sendmessage
     </pre>
 
     <hr/>
@@ -599,7 +600,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "name": "Nhóm Mới",
   "avatarPath": "./avatar.jpg",
   "ownId": "0000000000000000001"
-}' http://localhost:3000/api/createGroup
+}' <%= baseUrl %>/api/createGroup
     </pre>
 
     <hr/>
@@ -635,7 +636,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
 curl -X POST -H "Content-Type: application/json" -d '{
   "groupId": "0000000000000000000",
   "ownId": "0000000000000000009"
-}' http://localhost:3000/api/getGroupInfo
+}' <%= baseUrl %>/api/getGroupInfo
     </pre>
 
     <hr/>
@@ -679,7 +680,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "groupId": "0000000000000000000",
   "memberId": ["0000000000000000001", "0000000000000000002"],
   "ownId": "0000000000000000009"
-}' http://localhost:3000/api/addUserToGroup
+}' <%= baseUrl %>/api/addUserToGroup
     </pre>
 
     <hr/>
@@ -723,7 +724,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "groupId": "0000000000000000000",
   "memberId": ["0000000000000000001", "0000000000000000002"],
   "ownId": "0000000000000000009"
-}' http://localhost:3000/api/removeUserFromGroup
+}' <%= baseUrl %>/api/removeUserFromGroup
     </pre>
 
     <hr/>
@@ -767,7 +768,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "imageUrl": "./path/to/image.jpg",
   "threadId": "0000000000000000001",
   "ownId": "0000000000000000009"
-}' http://localhost:3000/api/sendImageToUser
+}' <%= baseUrl %>/api/sendImageToUser
     </pre>
 
     <hr/>
@@ -811,7 +812,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "imageUrls": ["./path/to/image1.jpg", "./path/to/image2.jpg"],
   "threadId": "0000000000000000001",
   "ownId": "0000000000000000009"
-}' http://localhost:3000/api/sendImagesToUser
+}' <%= baseUrl %>/api/sendImagesToUser
     </pre>
 
     <hr/>
@@ -855,7 +856,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "imageUrl": "./path/to/group-image.jpg",
   "threadId": "0000000000000000000",
   "ownId": "0000000000000000009"
-}' http://localhost:3000/api/sendImageToGroup
+}' <%= baseUrl %>/api/sendImageToGroup
     </pre>
 
     <hr/>
@@ -899,7 +900,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "imageUrls": ["./path/to/group-image1.jpg", "./path/to/group-image2.jpg"],
   "threadId": "0000000000000000000",
   "ownId": "0000000000000000009"
-}' http://localhost:3000/api/sendImagesToGroup
+}' <%= baseUrl %>/api/sendImagesToGroup
     </pre>
 
     <hr/>

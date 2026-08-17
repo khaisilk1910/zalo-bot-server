@@ -1,54 +1,149 @@
-import { GroupEventType } from "zca-js";
-import { getWebhookUrl, triggerN8nWebhook } from './utils/helpers.js';
+import { getWebhookUrl, triggerN8nWebhook, getCookiesDir } from './utils/helpers.js';
 import { broadcastToWebsocket } from './services/webhookService.js';
 import fs from 'fs';
+import path from 'path';
 import { loginZaloAccount, zaloAccounts } from './api/zalo/zalo.js';
 import { broadcastMessage } from './server.js';
 
-// Biến để theo dõi thời gian relogin cho từng tài khoản
+// Theo dõi thời điểm reconnect gần nhất (giữ export để tương thích code cũ nếu có).
 export const reloginAttempts = new Map();
-// Thời gian tối thiểu giữa các lần thử relogin (5 phút)
-const RELOGIN_COOLDOWN = 5 * 60 * 1000;
+
+// Backoff: 5s -> 15s -> 30s -> 60s -> 120s -> 300s; sau đó tiếp tục 300s/lần.
+const RECONNECT_DELAYS = [5000, 15000, 30000, 60000, 120000, 300000];
+const reconnectStates = new Map();
+
+function clearReconnectState(ownId) {
+    const state = reconnectStates.get(ownId);
+    if (state?.timer) {
+        clearTimeout(state.timer);
+    }
+    reconnectStates.delete(ownId);
+    reloginAttempts.delete(ownId);
+}
+
+function scheduleRelogin(api, immediate = false) {
+    const ownId = api?.getOwnId?.();
+    if (!ownId) {
+        console.error('[Reconnect] Không thể xác định ownId, không thể đăng nhập lại');
+        return;
+    }
+
+    // Nếu account đã được thay bằng API mới thì bỏ qua event closed cũ.
+    const currentAccount = zaloAccounts.find(acc => acc.ownId === ownId);
+    if (currentAccount?.api && currentAccount.api !== api) {
+        console.log(`[Reconnect] Bỏ qua listener cũ của ${ownId}; account đã có API mới.`);
+        return;
+    }
+
+    let state = reconnectStates.get(ownId);
+    if (!state) {
+        state = { attempt: 0, timer: null, running: false, sourceApi: api };
+        reconnectStates.set(ownId, state);
+    }
+
+    if (state.running || state.timer) {
+        console.log(`[Reconnect] ${ownId} đã có một tiến trình reconnect đang chờ/chạy.`);
+        return;
+    }
+
+    const delay = immediate
+        ? 0
+        : RECONNECT_DELAYS[Math.min(state.attempt, RECONNECT_DELAYS.length - 1)];
+
+    console.log(`[Reconnect] Sẽ thử đăng nhập lại ${ownId} sau ${Math.round(delay / 1000)} giây (lần ${state.attempt + 1}).`);
+    state.timer = setTimeout(() => attemptRelogin(ownId), delay);
+    reconnectStates.set(ownId, state);
+}
+
+async function attemptRelogin(ownId) {
+    const state = reconnectStates.get(ownId);
+    if (!state || state.running) return;
+
+    state.timer = null;
+    state.running = true;
+    reloginAttempts.set(ownId, Date.now());
+
+    try {
+        const accountInfo = zaloAccounts.find(acc => acc.ownId === ownId);
+
+        // Nếu một API mới đã thay thế API gây disconnect thì reconnect đã thành công ở nơi khác.
+        if (accountInfo?.api && state.sourceApi && accountInfo.api !== state.sourceApi) {
+            console.log(`[Reconnect] ${ownId} đã có API mới, hủy retry cũ.`);
+            clearReconnectState(ownId);
+            return;
+        }
+
+        const cookiesDir = getCookiesDir();
+        const cookieFile = path.join(cookiesDir, `cred_${ownId}.json`);
+
+        if (!fs.existsSync(cookieFile)) {
+            console.error(`[Reconnect] Không tìm thấy credential ${cookieFile}. Không thể tự reconnect nếu không có cookie.`);
+            clearReconnectState(ownId);
+            return;
+        }
+
+        const savedCredential = JSON.parse(fs.readFileSync(cookieFile, 'utf8'));
+        const credentialHasProxy = Object.prototype.hasOwnProperty.call(savedCredential, 'proxy');
+        const accountHasProxy = !!accountInfo && Object.prototype.hasOwnProperty.call(accountInfo, 'proxy');
+
+        // Ưu tiên proxy đã lưu cùng credential. Với credential legacy, dùng proxy của account hiện tại.
+        const savedProxy = credentialHasProxy
+            ? (savedCredential.proxy || null)
+            : (accountInfo?.proxy || null);
+
+        // Khi đã biết account trước đó dùng proxy gì (kể cả null = không proxy),
+        // không tự chọn proxy khác. Credential legacy không có thông tin mới cho phép auto-select.
+        const autoSelectProxy = !(credentialHasProxy || accountHasProxy);
+
+        console.log(`[Reconnect] Đang đăng nhập lại ${ownId} với ${savedProxy || 'không proxy'}...`);
+
+        await loginZaloAccount(savedProxy, savedCredential, {
+            allowQrFallback: false,
+            autoSelectProxy
+        });
+
+        console.log(`[Reconnect] Đăng nhập lại thành công tài khoản ${ownId}.`);
+        clearReconnectState(ownId);
+    } catch (error) {
+        console.error(`[Reconnect] Lần ${state.attempt + 1} thất bại cho ${ownId}:`, error?.message || error);
+        state.running = false;
+        state.attempt += 1;
+        reconnectStates.set(ownId, state);
+
+        // Không xóa cookie, không sinh QR. Tiếp tục retry theo backoff.
+        scheduleRelogin(state.sourceApi);
+    }
+}
 
 export function setupEventListeners(api, loginResolve) {
     const ownId = api.getOwnId();
-    
-    // Lắng nghe sự kiện tin nhắn và gửi đến webhook được cấu hình cho tin nhắn
-    api.listener.on("message", (msg) => {
-        const messageWebhookUrl = getWebhookUrl("messageWebhookUrl", ownId);
-        // Thêm ownId vào dữ liệu để webhook biết tin nhắn từ tài khoản nào
+
+    api.listener.on('message', (msg) => {
+        const messageWebhookUrl = getWebhookUrl('messageWebhookUrl', ownId);
         const msgWithOwnId = { ...msg, _accountId: ownId };
-        
-        // Gửi tới webhook nếu được cấu hình
+
         if (messageWebhookUrl) {
             triggerN8nWebhook(msgWithOwnId, messageWebhookUrl);
         }
-        
-        // Broadcast tin nhắn tới WebSocket cho trang hiển thị thread_id
+
         broadcastToWebsocket(msgWithOwnId);
     });
 
-    // Lắng nghe sự kiện nhóm và gửi đến webhook được cấu hình cho sự kiện nhóm
-    api.listener.on("group_event", (data) => {
-        const groupEventWebhookUrl = getWebhookUrl("groupEventWebhookUrl", ownId);
-        // Thêm ownId vào dữ liệu
+    api.listener.on('group_event', (data) => {
+        const groupEventWebhookUrl = getWebhookUrl('groupEventWebhookUrl', ownId);
         const dataWithOwnId = { ...data, _accountId: ownId };
-        
-        // Gửi tới webhook nếu được cấu hình
+
         if (groupEventWebhookUrl) {
             triggerN8nWebhook(dataWithOwnId, groupEventWebhookUrl);
         }
-        
-        // Broadcast sự kiện nhóm tới WebSocket 
+
         broadcastToWebsocket(dataWithOwnId);
     });
 
-    // Lắng nghe sự kiện reaction và gửi đến webhook được cấu hình cho reaction
-    api.listener.on("reaction", (reaction) => {
-        const reactionWebhookUrl = getWebhookUrl("reactionWebhookUrl", ownId);
-        console.log("Nhận reaction:", reaction);
+    api.listener.on('reaction', (reaction) => {
+        const reactionWebhookUrl = getWebhookUrl('reactionWebhookUrl', ownId);
+        console.log('Nhận reaction:', reaction);
         if (reactionWebhookUrl) {
-            // Thêm ownId vào dữ liệu
             const reactionWithOwnId = { ...reaction, _accountId: ownId };
             triggerN8nWebhook(reactionWithOwnId, reactionWebhookUrl);
         }
@@ -56,76 +151,25 @@ export function setupEventListeners(api, loginResolve) {
 
     api.listener.onConnected(() => {
         console.log(`Connected account ${ownId}`);
-        loginResolve('login_success');
-        
-        // Gửi thông báo đến tất cả client
+        clearReconnectState(ownId);
+
+        if (typeof loginResolve === 'function') {
+            loginResolve('login_success');
+        }
+
         try {
             broadcastMessage('login_success');
         } catch (err) {
             console.error('Lỗi khi gửi thông báo WebSocket:', err);
         }
     });
-    
+
     api.listener.onClosed(() => {
         console.log(`Closed - API listener đã ngắt kết nối cho tài khoản ${ownId}`);
-        
-        // Xử lý đăng nhập lại khi API listener bị đóng
-        handleRelogin(api);
+        scheduleRelogin(api);
     });
-    
+
     api.listener.onError((error) => {
         console.error(`Error on account ${ownId}:`, error);
     });
-}
-
-// Hàm xử lý đăng nhập lại
-async function handleRelogin(api) {
-    try {
-        console.log("Đang thử đăng nhập lại...");
-        
-        // Lấy ownId của tài khoản bị ngắt kết nối
-        const ownId = api.getOwnId();
-        
-        if (!ownId) {
-            console.error("Không thể xác định ownId, không thể đăng nhập lại");
-            return;
-        }
-        
-        // Kiểm tra thời gian relogin gần nhất
-        const lastReloginTime = reloginAttempts.get(ownId);
-        const now = Date.now();
-        
-        if (lastReloginTime && now - lastReloginTime < RELOGIN_COOLDOWN) {
-            console.log(`Bỏ qua việc đăng nhập lại tài khoản ${ownId}, đã thử cách đây ${Math.floor((now - lastReloginTime) / 1000)} giây`);
-            return;
-        }
-        
-        // Cập nhật thời gian relogin
-        reloginAttempts.set(ownId, now);
-        
-        // Tìm thông tin proxy từ mảng zaloAccounts
-        const accountInfo = zaloAccounts.find(acc => acc.ownId === ownId);
-        const customProxy = accountInfo?.proxy || null;
-        
-        // Tìm file cookie tương ứng
-        const cookiesDir = './data/cookies';
-        const cookieFile = `${cookiesDir}/cred_${ownId}.json`;
-        
-        if (!fs.existsSync(cookieFile)) {
-            console.error(`Không tìm thấy file cookie cho tài khoản ${ownId}`);
-            return;
-        }
-        
-        // Đọc cookie từ file
-        const cookie = JSON.parse(fs.readFileSync(cookieFile, "utf-8"));
-        
-        // Đăng nhập lại với cookie
-        console.log(`Đang đăng nhập lại tài khoản ${ownId} với proxy ${customProxy || 'không có'}...`);
-        
-        // Thực hiện đăng nhập lại
-        await loginZaloAccount(customProxy, cookie);
-        console.log(`Đã đăng nhập lại thành công tài khoản ${ownId}`);
-    } catch (error) {
-        console.error("Lỗi khi thử đăng nhập lại:", error);
-    }
 }

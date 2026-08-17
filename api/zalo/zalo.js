@@ -11,89 +11,53 @@ import { saveImage, removeImage, saveFileFromUrl, removeFile } from '../../utils
 export const zaloAccounts = [];
 
 // Chức năng tự động kiểm tra trạng thái đăng nhập (10 phút/lần)
+// v1.0.1: Health-check chỉ quan sát trạng thái. KHÔNG xóa cookie hoặc tài khoản
+// khi gặp timeout/lỗi mạng tạm thời, để cơ chế reconnect có thể tự phục hồi.
 async function checkLoginStatus() {
     console.log("[Docker] Đang kiểm tra trạng thái đăng nhập của tất cả tài khoản...");
-    
+
     if (zaloAccounts.length === 0) {
         console.log("[Docker] Không có tài khoản nào để kiểm tra");
         return;
     }
-    
-    // Lấy thư mục lưu cookie (sử dụng dynamic import tương tự như trong loginZaloAccount)
-    const { getCookiesDir } = await import('../../utils/helpers.js');
-    const cookiesDir = getCookiesDir();
-    console.log(`[Docker] Thư mục cookie: ${cookiesDir}`);
-    
-    // Kiểm tra từng tài khoản
-    const checkPromises = zaloAccounts.map(async (account, index) => {
+
+    const checkPromises = zaloAccounts.map(async (account) => {
+        const accountLabel = account?.phoneNumber || account?.ownId || 'không xác định';
+
+        if (!account || !account.api) {
+            console.warn(`[Docker] Tài khoản ${accountLabel} hiện không có API. Giữ nguyên credential để có thể khôi phục.`);
+            return { healthy: false, account };
+        }
+
         try {
-            if (!account || !account.api) {
-                console.log(`[Docker] Tài khoản ${account?.phoneNumber || account?.ownId || 'không xác định'} không có API, bị loại bỏ`);
-                return { account: null, ownId: account?.ownId };
-            }
-            
-            // Lưu ownId để sử dụng sau này nếu cần xóa cookie
-            const ownId = account.ownId;
-            
-            // Thêm timeout để tránh treo container nếu API không phản hồi
-            const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Timeout')), 30000)
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Health-check timeout')), 30000)
             );
-            
-            // Gọi fetchAccountInfo với timeout
+
             const accountInfoPromise = account.api.fetchAccountInfo();
             const accountInfo = await Promise.race([accountInfoPromise, timeoutPromise]);
-            
+
             if (accountInfo?.profile) {
-                console.log(`[Docker] Tài khoản ${account.phoneNumber || account.ownId} vẫn đăng nhập thành công`);
-                return { account, ownId };
-            } else {
-                console.log(`[Docker] Tài khoản ${account.phoneNumber || account.ownId} đăng nhập thất bại (không có profile)`);
-                return { account: null, ownId };
+                console.log(`[Docker] Tài khoản ${accountLabel} vẫn đăng nhập thành công`);
+                return { healthy: true, account };
             }
+
+            console.warn(`[Docker] Tài khoản ${accountLabel} không trả về profile. Không xóa cookie; chờ listener/reconnect xử lý.`);
+            return { healthy: false, account };
         } catch (error) {
-            console.error(`[Docker] Lỗi kiểm tra tài khoản ${account?.phoneNumber || account?.ownId || 'không xác định'}:`, error.message);
-            return { account: null, ownId: account?.ownId };
+            console.warn(`[Docker] Health-check lỗi cho tài khoản ${accountLabel}: ${error.message}. Không xóa cookie.`);
+            return { healthy: false, account, transientError: true };
         }
     });
-    
-    // Đợi tất cả promise hoàn thành và lọc ra tài khoản hợp lệ
-    Promise.all(checkPromises)
-        .then(results => {
-            const validResults = results.filter(result => result.account !== null);
-            const invalidResults = results.filter(result => result.account === null && result.ownId);
-            
-            // Cập nhật mảng zaloAccounts với chỉ các tài khoản hợp lệ
-            const removedCount = zaloAccounts.length - validResults.length;
-            
-            if (removedCount > 0) {
-                console.log(`[Docker] Đã loại bỏ ${removedCount} tài khoản không hợp lệ`);
-                
-                // Xóa file cookie của các tài khoản không hợp lệ
-                invalidResults.forEach(result => {
-                    if (result.ownId) {
-                        try {
-                            const cookiePath = path.join(cookiesDir, `cred_${result.ownId}.json`);
-                            if (fs.existsSync(cookiePath)) {
-                                fs.unlinkSync(cookiePath);
-                                console.log(`[Docker] Đã xóa file cookie của tài khoản ${result.ownId}`);
-                            }
-                        } catch (error) {
-                            console.error(`[Docker] Lỗi khi xóa file cookie của tài khoản ${result.ownId}:`, error);
-                        }
-                    }
-                });
-                
-                // Cập nhật danh sách tài khoản
-                zaloAccounts.length = 0;
-                validResults.forEach(result => zaloAccounts.push(result.account));
-            }
-            
-            console.log(`[Docker] Đã hoàn thành kiểm tra: ${validResults.length} tài khoản hợp lệ còn lại`);
-        })
-        .catch(error => {
-            console.error("[Docker] Lỗi khi xử lý kết quả kiểm tra:", error);
-        });
+
+    try {
+        const results = await Promise.all(checkPromises);
+        const healthyCount = results.filter(result => result.healthy).length;
+        const unhealthyCount = results.length - healthyCount;
+        console.log(`[Docker] Hoàn thành kiểm tra: ${healthyCount} khỏe, ${unhealthyCount} cần theo dõi. Cookie được giữ nguyên.`);
+    } catch (error) {
+        console.error("[Docker] Lỗi khi xử lý kết quả kiểm tra:", error);
+    }
 }
 
 // Khởi động kiểm tra tự động sau khi server bắt đầu (đảm bảo đã đăng nhập đủ)
@@ -2277,12 +2241,25 @@ export async function sendFile(req, res) {
     }
 }
 
-export async function loginZaloAccount(customProxy, cred) {
+export async function loginZaloAccount(customProxy, cred, options = {}) {
+    const {
+        allowQrFallback = true,
+        autoSelectProxy = true
+    } = options;
+
+    // Credential v1.0.1 có thêm trường `proxy` để nhớ đúng đường ra mạng.
+    // Không truyền trường nội bộ này vào zca-js.
+    const loginCredential = cred
+        ? Object.fromEntries(Object.entries(cred).filter(([key]) => key !== 'proxy'))
+        : null;
+
     let loginResolve;
     return new Promise(async (resolve, reject) => {
         console.log('Bắt đầu quá trình đăng nhập Zalo...');
         console.log('Custom proxy:', customProxy || 'không có');
-        console.log('Đang nhập với cookie:', cred ? 'có' : 'không');
+        console.log('Đang nhập với cookie:', loginCredential ? 'có' : 'không');
+        console.log('Cho phép fallback QR:', allowQrFallback ? 'có' : 'không');
+        console.log('Tự động chọn proxy:', autoSelectProxy ? 'có' : 'không');
 
         loginResolve = resolve;
         let agent;
@@ -2341,12 +2318,13 @@ export async function loginZaloAccount(customProxy, cred) {
         if (useCustomProxy) {
             console.log('Sử dụng proxy tùy chỉnh:', customProxy);
             agent = new HttpsProxyAgent(customProxy);
-        } else {
-            // Chọn proxy tự động từ danh sách nếu không có proxy do người dùng nhập hợp lệ
+        } else if (autoSelectProxy) {
+            // Chỉ tự chọn proxy cho lần login mới hoặc credential legacy chưa lưu proxy.
             if (proxies.length > 0) {
                 const proxyIndex = getAvailableProxyIndex();
                 if (proxyIndex === -1) {
-                    console.log('Tất cả proxy đều đã đủ tài khoản. Không thể đăng nhập thêm!');
+                    console.log('Tất cả proxy đều đã đủ tài khoản. Sẽ đăng nhập không qua proxy.');
+                    agent = null;
                 } else {
                     proxyUsed = getPROXIES()[proxyIndex];
                     console.log('Sử dụng proxy tự động:', proxyUsed.url);
@@ -2354,8 +2332,13 @@ export async function loginZaloAccount(customProxy, cred) {
                 }
             } else {
                 console.log('Không có proxy nào có sẵn, sẽ đăng nhập không qua proxy');
-                agent = null; // Không sử dụng proxy
+                agent = null;
             }
+        } else {
+            // Reconnect/restore của credential đã biết là không dùng proxy:
+            // tuyệt đối không tự đổi sang proxy khác vì có thể làm Zalo vô hiệu session.
+            console.log('Giữ kết nối không proxy theo credential đã lưu');
+            agent = null;
         }
         let zalo;
         // Hàm lấy metadata của hình ảnh
@@ -2457,15 +2440,20 @@ export async function loginZaloAccount(customProxy, cred) {
 
         let api;
         try {
-            if (cred) {
+            if (loginCredential) {
                 console.log('Đang thử đăng nhập bằng cookie...');
                 try {
-                    api = await zalo.login(cred);
+                    api = await zalo.login(loginCredential);
                     console.log('Đăng nhập bằng cookie thành công');
                 } catch (error) {
                     console.error("Lỗi khi đăng nhập bằng cookie:", error);
-                    console.log('Chuyển sang đăng nhập bằng mã QR...');
-                    // If cookie login fails, attempt QR code login
+
+                    // Auto-reconnect/restore không được tự sinh QR. Giữ cookie để retry.
+                    if (!allowQrFallback) {
+                        throw error;
+                    }
+
+                    console.log('Cookie không sử dụng được, chuyển sang đăng nhập bằng mã QR...');
                     api = await zalo.loginQR(null, (qrData) => {
                         console.log('Đã nhận dữ liệu QR:', qrData ? 'có dữ liệu' : 'không có dữ liệu');
                         if (qrData?.data?.image) {
@@ -2535,10 +2523,14 @@ export async function loginZaloAccount(customProxy, cred) {
             console.log('Đang lưu cookie...');
             const context = await api.getContext();
             const {imei, cookie, userAgent} = context;
+            const effectiveProxy = useCustomProxy ? customProxy : (proxyUsed?.url || null);
             const data = {
                 imei: imei,
                 cookie: cookie,
                 userAgent: userAgent,
+                // Lưu proxy cùng credential để restart/reconnect giữ nguyên IP/proxy.
+                // null nghĩa là account này được đăng nhập không qua proxy.
+                proxy: effectiveProxy,
             }
             
             // Import hàm getCookiesDir

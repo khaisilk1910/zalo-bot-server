@@ -164,10 +164,19 @@ if (fs.existsSync(cookiesDir)) {
                             if (fs.existsSync(cookiePath)) {
                                 const cookie = JSON.parse(fs.readFileSync(cookiePath, "utf-8"));
                                 try {
-                                    await loginZaloAccount(null, cookie);
+                                    const hasSavedProxy = Object.prototype.hasOwnProperty.call(cookie, 'proxy');
+                                    const savedProxy = hasSavedProxy ? (cookie.proxy || null) : null;
+
+                                    await loginZaloAccount(savedProxy, cookie, {
+                                        // Restore tự động không được tạo QR; nếu Zalo tạm lỗi thì giữ cookie.
+                                        allowQrFallback: false,
+                                        // Credential v1.0.1 đã biết chính xác proxy (kể cả null = không proxy).
+                                        // Credential legacy chưa có `proxy` vẫn dùng cơ chế chọn proxy cũ một lần.
+                                        autoSelectProxy: !hasSavedProxy
+                                    });
                                     console.log(`Đã đăng nhập lại tài khoản ${ownId} từ cookie.`);
                                 } catch (loginError) {
-                                    console.error(`Lỗi khi đăng nhập lại tài khoản ${ownId} từ cookie:`, loginError);
+                                    console.error(`Lỗi khi đăng nhập lại tài khoản ${ownId} từ cookie; credential vẫn được giữ nguyên:`, loginError);
                                 }
                             } else {
                                 console.log(`Không tìm thấy file cookie: ${cookiePath}`);

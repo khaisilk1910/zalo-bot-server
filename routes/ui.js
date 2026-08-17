@@ -92,7 +92,14 @@ router.get('/updateWebhookForm', (req, res) => {
 
 // Endpoint hiển thị tài liệu API
 router.get('/list', (req, res) => {
-    res.render('api-doc');
+    // Tự nhận protocol/host/port hiện tại, kể cả khi chạy sau reverse proxy.
+    const forwardedProto = req.get('x-forwarded-proto');
+    const forwardedHost = req.get('x-forwarded-host');
+    const protocol = forwardedProto ? forwardedProto.split(',')[0].trim() : req.protocol;
+    const host = forwardedHost ? forwardedHost.split(',')[0].trim() : req.get('host');
+    const baseUrl = `${protocol}://${host}`;
+
+    res.render('api-doc', { baseUrl });
 });
 
 // Lấy danh sách tài khoản đã đăng nhập
