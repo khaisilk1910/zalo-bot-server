@@ -188,7 +188,8 @@ curl -X POST -H "Content-Type: application/json" -d '{
         <tr><th>Field</th><th>Loại</th><th>Mô tả</th><th>Bắt buộc</th></tr>
         <tr><td>message</td><td>string</td><td>Nội dung tin nhắn</td><td>Có</td></tr>
         <tr><td>threadId</td><td>string</td><td>ID người dùng/nhóm</td><td>Có</td></tr>
-        <tr><td>type</td><td>string</td><td>"user" hoặc "group"</td><td>Không</td></tr>
+        <tr><td>type</td><td>string | number</td><td>"user"/0 hoặc "group"/1</td><td>Không</td></tr>
+        <tr><td>ttl</td><td>string | number</td><td>Auto Delete của cuộc trò chuyện: 0/off, 1d/86400000, 7d/604800000, 14d/1209600000</td><td>Không</td></tr>
         <tr><td>accountSelection</td><td>string</td><td>Số điện thoại hoặc ownId</td><td>Có</td></tr>
     </table>
     <p><strong>Ví dụ:</strong></p>
@@ -197,6 +198,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "message": "Hello from n8n!",
   "threadId": "user_thread_id",
   "type": "user",
+  "ttl": "1d",
   "accountSelection": "0901234567"
 }
     </pre>
@@ -206,9 +208,12 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "message": "Hello from n8n!",
   "threadId": "user_thread_id",
   "type": "user",
+  "ttl": "1d",
   "accountSelection": "0901234567"
 }' <%= baseUrl %>/api/sendMessageByAccount
     </pre>
+    <p><strong>⚠️ Lưu ý về TTL:</strong> Zalo hiện không còn thực thi ổn định TTL riêng trên từng <code>sendMessage()</code>. Khi có <code>ttl</code>, Zalo Bot Server sẽ cấu hình <strong>Auto Delete cho toàn bộ cuộc trò chuyện</strong> bằng API <code>updateAutoDeleteChat()</code> rồi mới gửi tin. Cài đặt này được giữ cho các tin nhắn tiếp theo cho tới khi bạn đổi lại hoặc gửi <code>ttl: 0</code>/<code>off</code>.</p>
+    <p><strong>TTL hỗ trợ:</strong> 1 ngày (<code>1d</code>/<code>86400000</code>), 7 ngày (<code>7d</code>/<code>604800000</code>), 14 ngày (<code>14d</code>/<code>1209600000</code>).</p>
 
     <hr/>
 
@@ -220,7 +225,8 @@ curl -X POST -H "Content-Type: application/json" -d '{
         <tr><th>Field</th><th>Loại</th><th>Mô tả</th><th>Bắt buộc</th></tr>
         <tr><td>imagePath</td><td>string</td><td>URL hình ảnh</td><td>Có</td></tr>
         <tr><td>threadId</td><td>string</td><td>ID người dùng/nhóm</td><td>Có</td></tr>
-        <tr><td>type</td><td>string</td><td>"user" hoặc "group"</td><td>Không</td></tr>
+        <tr><td>type</td><td>string | number</td><td>"user"/0 hoặc "group"/1</td><td>Không</td></tr>
+        <tr><td>ttl</td><td>string | number</td><td>Auto Delete: 1d, 7d, 14d hoặc 0/off để tắt</td><td>Không</td></tr>
         <tr><td>accountSelection</td><td>string</td><td>Số điện thoại hoặc ownId</td><td>Có</td></tr>
     </table>
     <p><strong>Ví dụ:</strong></p>
@@ -526,6 +532,12 @@ curl -X POST -H "Content-Type: application/json" -d '{
           <td>Không</td>
         </tr>
         <tr>
+          <td>ttl</td>
+          <td>string | number</td>
+          <td>Auto Delete của cuộc trò chuyện: 1d/86400000, 7d/604800000, 14d/1209600000; 0/off để tắt.</td>
+          <td>Không</td>
+        </tr>
+        <tr>
           <td>ownId</td>
           <td>string</td>
           <td>ID tài khoản Zalo đang đăng nhập (lấy từ /accounts).</td>
@@ -538,6 +550,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "message": "Xin chào",
   "threadId": "0000000000000000001",
   "type": 0,
+  "ttl": "1d",
   "ownId": "0000000000000000009"
 }
     </pre>
@@ -547,6 +560,7 @@ curl -X POST -H "Content-Type: application/json" -d '{
   "message": "Xin chào",
   "threadId": "0000000000000000001",
   "type": 0,
+  "ttl": "1d",
   "ownId": "0000000000000000009"
 }' <%= baseUrl %>/api/sendmessage
     </pre>

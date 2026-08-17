@@ -7,6 +7,7 @@ import nodefetch from "node-fetch";
 import fs from 'fs';
 import path from 'path';
 import { saveImage, removeImage, saveFileFromUrl, removeFile } from '../../utils/helpers.js';
+import { applyAutoDeleteIfRequested, getRequestedAutoDeleteTtl, normalizeAutoDeleteTtl, normalizeThreadType, stripLegacyMessageTtl } from '../../utils/autoDelete.js';
 
 export const zaloAccounts = [];
 
@@ -212,40 +213,46 @@ export async function sendMessageByAccount(req, res) {
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const msgType = type || ThreadType.User;
-        
-        // Handle quote message if provided
-        let messageContent = message;
+        const msgType = normalizeThreadType(type, ThreadType);
+        const requestedTtl = getRequestedAutoDeleteTtl(req.body, message);
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, requestedTtl, threadId, msgType);
+
+        // Per-message ttl is no longer reliably honored by Zalo. Remove it from
+        // MessageContent and use conversation auto-delete above instead.
+        let messageContent = stripLegacyMessageTtl(message);
         if (quote) {
-            // Convert simple string message to MessageContent object with quote
-            if (typeof message === 'string') {
+            if (typeof messageContent === 'string') {
                 messageContent = {
-                    msg: message,
-                    quote: quote
+                    msg: messageContent,
+                    quote
                 };
-            } else if (typeof message === 'object') {
-                // If message is already an object, add the quote to it
-                messageContent.quote = quote;
+            } else if (typeof messageContent === 'object') {
+                messageContent = {
+                    ...messageContent,
+                    quote
+                };
             }
         }
 
-        const result = await account.api.sendMessage(messageContent, threadId, msgType);
+        const result = await account.api.sendMessage(messageContent, String(threadId), msgType);
 
         res.json({
             success: true,
             data: result,
+            autoDelete,
             usedAccount: {
                 ownId: account.ownId,
                 phoneNumber: account.phoneNumber
             }
         });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /ttl|type không hợp lệ/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
-// API gửi hình ảnh với account selection
 export async function sendImageByAccount(req, res) {
+    let imagePath;
     try {
         const { imagePath: imageUrl, threadId, type, accountSelection, ttl, message } = req.body;
 
@@ -254,39 +261,42 @@ export async function sendImageByAccount(req, res) {
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const imagePath = await saveImage(imageUrl);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, threadType);
 
+        imagePath = await saveImage(imageUrl);
         if (!imagePath) {
             return res.status(500).json({ success: false, error: 'Không thể lưu hình ảnh' });
         }
 
-        const threadType = type === 'group' ? ThreadType.Group : ThreadType.User;
         const result = await account.api.sendMessage(
             {
-                msg: message || "",  // Thêm message support
-                attachments: [imagePath],
-                ttl: ttl ? parseInt(ttl) : 0  // Thêm TTL support
+                msg: message || '',
+                attachments: [imagePath]
             },
-            threadId,
+            String(threadId),
             threadType
         );
 
         removeImage(imagePath);
+        imagePath = null;
 
         res.json({
             success: true,
             data: result,
+            autoDelete,
             usedAccount: {
                 ownId: account.ownId,
                 phoneNumber: account.phoneNumber
             }
         });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        if (imagePath) removeImage(imagePath);
+        const status = /ttl|type không hợp lệ/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
-// API lấy thông tin user với account selection
 export async function getUserInfoByAccount(req, res) {
     try {
         const { userId, accountSelection } = req.body;
@@ -439,186 +449,171 @@ export async function removeUserFromGroupByAccount(req, res) {
 
 // API gửi hình ảnh đến user với account selection
 export async function sendImageToUserByAccount(req, res) {
+    let imagePath;
     try {
-        const { imagePath: imageUrl, threadId, accountSelection } = req.body;
+        const { imagePath: imageUrl, threadId, accountSelection, ttl } = req.body;
 
         if (!imageUrl || !threadId) {
             return res.status(400).json({ error: 'Đường dẫn hình ảnh và threadId là bắt buộc' });
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const imagePath = await saveImage(imageUrl);
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.User);
+        imagePath = await saveImage(imageUrl);
 
         if (!imagePath) {
             return res.status(500).json({ success: false, error: 'Không thể lưu hình ảnh' });
         }
 
         const result = await account.api.sendMessage(
-            {
-                msg: "",
-                attachments: [imagePath]
-            },
-            threadId,
+            { msg: '', attachments: [imagePath] },
+            String(threadId),
             ThreadType.User
         );
 
         removeImage(imagePath);
+        imagePath = null;
 
         res.json({
             success: true,
             data: result,
-            usedAccount: {
-                ownId: account.ownId,
-                phoneNumber: account.phoneNumber
-            }
+            autoDelete,
+            usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
         });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        if (imagePath) removeImage(imagePath);
+        const status = /ttl/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
-// API gửi nhiều hình ảnh đến user với account selection
 export async function sendImagesToUserByAccount(req, res) {
+    const imagePaths = [];
     try {
-        const { imagePaths: imageUrls, threadId, accountSelection } = req.body;
+        const { imagePaths: imageUrls, threadId, accountSelection, ttl } = req.body;
 
         if (!imageUrls || !threadId || !Array.isArray(imageUrls) || imageUrls.length === 0) {
             return res.status(400).json({ error: 'Danh sách hình ảnh và threadId là bắt buộc' });
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const imagePaths = [];
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.User);
 
         for (const imageUrl of imageUrls) {
             const imagePath = await saveImage(imageUrl);
             if (!imagePath) {
-                // Clean up any saved images
-                for (const path of imagePaths) {
-                    removeImage(path);
-                }
+                for (const savedPath of imagePaths) removeImage(savedPath);
                 return res.status(500).json({ success: false, error: 'Không thể lưu một hoặc nhiều hình ảnh' });
             }
             imagePaths.push(imagePath);
         }
 
         const result = await account.api.sendMessage(
-            {
-                msg: "",
-                attachments: imagePaths
-            },
-            threadId,
+            { msg: '', attachments: imagePaths },
+            String(threadId),
             ThreadType.User
         );
 
-        for (const imagePath of imagePaths) {
-            removeImage(imagePath);
-        }
+        for (const imagePath of imagePaths) removeImage(imagePath);
+        imagePaths.length = 0;
 
         res.json({
             success: true,
             data: result,
-            usedAccount: {
-                ownId: account.ownId,
-                phoneNumber: account.phoneNumber
-            }
+            autoDelete,
+            usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
         });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        for (const imagePath of imagePaths) removeImage(imagePath);
+        const status = /ttl/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
-// API gửi hình ảnh đến nhóm với account selection
 export async function sendImageToGroupByAccount(req, res) {
+    let imagePath;
     try {
-        const { imagePath: imageUrl, threadId, accountSelection } = req.body;
+        const { imagePath: imageUrl, threadId, accountSelection, ttl } = req.body;
 
         if (!imageUrl || !threadId) {
             return res.status(400).json({ error: 'Đường dẫn hình ảnh và threadId là bắt buộc' });
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const imagePath = await saveImage(imageUrl);
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.Group);
+        imagePath = await saveImage(imageUrl);
 
         if (!imagePath) {
             return res.status(500).json({ success: false, error: 'Không thể lưu hình ảnh' });
         }
 
         const result = await account.api.sendMessage(
-            {
-                msg: "",
-                attachments: [imagePath]
-            },
-            threadId,
+            { msg: '', attachments: [imagePath] },
+            String(threadId),
             ThreadType.Group
         );
 
         removeImage(imagePath);
+        imagePath = null;
 
         res.json({
             success: true,
             data: result,
-            usedAccount: {
-                ownId: account.ownId,
-                phoneNumber: account.phoneNumber
-            }
+            autoDelete,
+            usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
         });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        if (imagePath) removeImage(imagePath);
+        const status = /ttl/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
-// API gửi nhiều hình ảnh đến nhóm với account selection
 export async function sendImagesToGroupByAccount(req, res) {
+    const imagePaths = [];
     try {
-        const { imagePaths: imageUrls, threadId, accountSelection } = req.body;
+        const { imagePaths: imageUrls, threadId, accountSelection, ttl } = req.body;
 
         if (!imageUrls || !threadId || !Array.isArray(imageUrls) || imageUrls.length === 0) {
             return res.status(400).json({ error: 'Danh sách hình ảnh và threadId là bắt buộc' });
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const imagePaths = [];
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.Group);
 
         for (const imageUrl of imageUrls) {
             const imagePath = await saveImage(imageUrl);
             if (!imagePath) {
-                // Clean up any saved images
-                for (const path of imagePaths) {
-                    removeImage(path);
-                }
+                for (const savedPath of imagePaths) removeImage(savedPath);
                 return res.status(500).json({ success: false, error: 'Không thể lưu một hoặc nhiều hình ảnh' });
             }
             imagePaths.push(imagePath);
         }
 
         const result = await account.api.sendMessage(
-            {
-                msg: "",
-                attachments: imagePaths
-            },
-            threadId,
+            { msg: '', attachments: imagePaths },
+            String(threadId),
             ThreadType.Group
         );
 
-        for (const imagePath of imagePaths) {
-            removeImage(imagePath);
-        }
+        for (const imagePath of imagePaths) removeImage(imagePath);
+        imagePaths.length = 0;
 
         res.json({
             success: true,
             data: result,
-            usedAccount: {
-                ownId: account.ownId,
-                phoneNumber: account.phoneNumber
-            }
+            autoDelete,
+            usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
         });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        for (const imagePath of imagePaths) removeImage(imagePath);
+        const status = /ttl/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
-// API gửi file với account selection
 export async function sendFileByAccount(req, res) {
+    let filePath;
     try {
         const { fileUrl, threadId, type, accountSelection, message, ttl } = req.body;
 
@@ -627,40 +622,35 @@ export async function sendFileByAccount(req, res) {
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const filePath = await saveFileFromUrl(fileUrl);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, threadType);
+        filePath = await saveFileFromUrl(fileUrl);
 
         if (!filePath) {
             return res.status(500).json({ success: false, error: 'Không thể tải và lưu file' });
         }
 
-        const threadType = type === 'group' ? ThreadType.Group : ThreadType.User;
         const result = await account.api.sendMessage(
-            {
-                msg: message || "", // Có thể gửi kèm tin nhắn
-                attachments: [filePath],
-                ttl: ttl ? parseInt(ttl) : 0  // Thêm TTL support
-            },
-            threadId,
+            { msg: message || '', attachments: [filePath] },
+            String(threadId),
             threadType
         );
 
-        removeFile(filePath); // Dọn dẹp file tạm
+        removeFile(filePath);
+        filePath = null;
 
         res.json({
             success: true,
             data: result,
-            usedAccount: {
-                ownId: account.ownId,
-                phoneNumber: account.phoneNumber
-            }
+            autoDelete,
+            usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
         });
     } catch (error) {
-        removeFile(filePath); // Dọn dẹp file tạm nếu có lỗi
-        res.status(500).json({ success: false, error: error.message });
+        if (filePath) removeFile(filePath);
+        const status = /ttl|type không hợp lệ/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
-
-// ===== NEW FRIEND MANAGEMENT APIs =====
 
 export async function acceptFriendRequestByAccount(req, res) {
     try {
@@ -1638,14 +1628,28 @@ export async function getAutoDeleteChatByAccount(req, res) {
 export async function updateAutoDeleteChatByAccount(req, res) {
     try {
         const { ttl, threadId, type, accountSelection } = req.body;
-        if (!ttl || !threadId) {
+        if (ttl === undefined || ttl === null || ttl === '' || !threadId) {
             return res.status(400).json({ error: 'ttl và threadId là bắt buộc' });
         }
+
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.updateAutoDeleteChat(ttl, threadId, type);
-        res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+        const threadType = normalizeThreadType(type, ThreadType);
+        const normalizedTtl = normalizeAutoDeleteTtl(ttl);
+        const result = await account.api.updateAutoDeleteChat(normalizedTtl, String(threadId), threadType);
+
+        res.json({
+            success: true,
+            data: result,
+            autoDelete: {
+                enabled: normalizedTtl !== 0,
+                ttl: normalizedTtl,
+                scope: 'conversation'
+            },
+            usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
+        });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /ttl|type không hợp lệ/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
@@ -1944,31 +1948,30 @@ export async function sendMessage(req, res) {
         if (!message || !threadId || !ownId) {
             return res.status(400).json({ error: 'Dữ liệu không hợp lệ' });
         }
+
         const account = zaloAccounts.find(acc => acc.ownId === ownId);
         if (!account) {
             return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
         }
-        const msgType = type || ThreadType.User;
 
-        // Handle quote message if provided
-        let messageContent = message;
+        const msgType = normalizeThreadType(type, ThreadType);
+        const requestedTtl = getRequestedAutoDeleteTtl(req.body, message);
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, requestedTtl, threadId, msgType);
+
+        let messageContent = stripLegacyMessageTtl(message);
         if (quote) {
-            // Convert simple string message to MessageContent object with quote
-            if (typeof message === 'string') {
-                messageContent = {
-                    msg: message,
-                    quote: quote
-                };
-            } else if (typeof message === 'object') {
-                // If message is already an object, add the quote to it
-                messageContent.quote = quote;
+            if (typeof messageContent === 'string') {
+                messageContent = { msg: messageContent, quote };
+            } else if (typeof messageContent === 'object') {
+                messageContent = { ...messageContent, quote };
             }
         }
 
-        const result = await account.api.sendMessage(messageContent, threadId, msgType);
-        res.json({ success: true, data: result });
+        const result = await account.api.sendMessage(messageContent, String(threadId), msgType);
+        res.json({ success: true, data: result, autoDelete });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /ttl|type không hợp lệ/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
@@ -2050,57 +2053,44 @@ export async function removeUserFromGroup(req, res) {
 
 // Hàm gửi một hình ảnh đến người dùng
 export async function sendImageToUser(req, res) {
+    let imagePath;
     try {
-        const { imagePath: imageUrl, threadId, ownId } = req.body;
+        const { imagePath: imageUrl, threadId, ownId, ttl } = req.body;
         if (!imageUrl || !threadId || !ownId) {
             return res.status(400).json({ error: 'Dữ liệu không hợp lệ: imagePath và threadId là bắt buộc' });
         }
-
-
-        const imagePath = await saveImage(imageUrl);
-        if (!imagePath) return res.status(500).json({ success: false, error: 'Failed to save image' });
 
         const account = zaloAccounts.find(acc => acc.ownId === ownId);
         if (!account) {
             return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
         }
 
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.User);
+        imagePath = await saveImage(imageUrl);
+        if (!imagePath) return res.status(500).json({ success: false, error: 'Failed to save image' });
+
         const result = await account.api.sendMessage(
-            {
-                msg: "",
-                attachments: [imagePath]
-            },
-            threadId,
+            { msg: '', attachments: [imagePath] },
+            String(threadId),
             ThreadType.User
-        ).catch(console.error);
+        );
 
         removeImage(imagePath);
-        res.json({ success: true, data: result });
+        imagePath = null;
+        res.json({ success: true, data: result, autoDelete });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        if (imagePath) removeImage(imagePath);
+        const status = /ttl/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
-// Hàm gửi nhiều hình ảnh đến người dùng
 export async function sendImagesToUser(req, res) {
+    const imagePaths = [];
     try {
-        const { imagePaths: imageUrls, threadId, ownId } = req.body;
+        const { imagePaths: imageUrls, threadId, ownId, ttl } = req.body;
         if (!imageUrls || !threadId || !ownId || !Array.isArray(imageUrls) || imageUrls.length === 0) {
             return res.status(400).json({ error: 'Dữ liệu không hợp lệ: imagePaths phải là mảng không rỗng và threadId là bắt buộc' });
-        }
-
-
-        const imagePaths = [];
-        for (const imageUrl of imageUrls) {
-            const imagePath = await saveImage(imageUrl);
-            if (!imagePath) {
-                // Clean up any saved images
-                for (const path of imagePaths) {
-                    removeImage(path);
-                }
-                return res.status(500).json({ success: false, error: 'Failed to save one or more images' });
-            }
-            imagePaths.push(imagePath);
         }
 
         const account = zaloAccounts.find(acc => acc.ownId === ownId);
@@ -2108,136 +2098,137 @@ export async function sendImagesToUser(req, res) {
             return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
         }
 
-        const result = await account.api.sendMessage(
-            {
-                msg: "",
-                attachments: imagePaths
-            },
-            threadId,
-            ThreadType.User
-        ).catch(console.error);
-
-        for (const imagePath of imagePaths) {
-            removeImage(imagePath);
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.User);
+        for (const imageUrl of imageUrls) {
+            const imagePath = await saveImage(imageUrl);
+            if (!imagePath) {
+                for (const savedPath of imagePaths) removeImage(savedPath);
+                return res.status(500).json({ success: false, error: 'Failed to save one or more images' });
+            }
+            imagePaths.push(imagePath);
         }
-        res.json({ success: true, data: result });
+
+        const result = await account.api.sendMessage(
+            { msg: '', attachments: imagePaths },
+            String(threadId),
+            ThreadType.User
+        );
+
+        for (const imagePath of imagePaths) removeImage(imagePath);
+        imagePaths.length = 0;
+        res.json({ success: true, data: result, autoDelete });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        for (const imagePath of imagePaths) removeImage(imagePath);
+        const status = /ttl/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
-// Hàm gửi một hình ảnh đến nhóm
 export async function sendImageToGroup(req, res) {
+    let imagePath;
     try {
-        const { imagePath: imageUrl, threadId, ownId } = req.body;
+        const { imagePath: imageUrl, threadId, ownId, ttl } = req.body;
         if (!imageUrl || !threadId || !ownId) {
             return res.status(400).json({ error: 'Dữ liệu không hợp lệ: imagePath và threadId là bắt buộc' });
         }
 
+        const account = zaloAccounts.find(acc => acc.ownId === ownId);
+        if (!account) {
+            return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
+        }
 
-        const imagePath = await saveImage(imageUrl);
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.Group);
+        imagePath = await saveImage(imageUrl);
         if (!imagePath) return res.status(500).json({ success: false, error: 'Failed to save image' });
+
+        const result = await account.api.sendMessage(
+            { msg: '', attachments: [imagePath] },
+            String(threadId),
+            ThreadType.Group
+        );
+
+        removeImage(imagePath);
+        imagePath = null;
+        res.json({ success: true, data: result, autoDelete });
+    } catch (error) {
+        if (imagePath) removeImage(imagePath);
+        const status = /ttl/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function sendImagesToGroup(req, res) {
+    const imagePaths = [];
+    try {
+        const { imagePaths: imageUrls, threadId, ownId, ttl } = req.body;
+        if (!imageUrls || !threadId || !ownId || !Array.isArray(imageUrls) || imageUrls.length === 0) {
+            return res.status(400).json({ error: 'Dữ liệu không hợp lệ: imagePaths phải là mảng không rỗng và threadId là bắt buộc' });
+        }
 
         const account = zaloAccounts.find(acc => acc.ownId === ownId);
         if (!account) {
             return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
         }
 
-        const result = await account.api.sendMessage(
-            {
-                msg: "",
-                attachments: [imagePath]
-            },
-            threadId,
-            ThreadType.Group
-        ).catch(console.error);
-
-        removeImage(imagePath);
-        res.json({ success: true, data: result });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-}
-
-// Hàm gửi nhiều hình ảnh đến nhóm
-export async function sendImagesToGroup(req, res) {
-    try {
-        const { imagePaths: imageUrls, threadId, ownId } = req.body;
-        if (!imageUrls || !threadId || !ownId || !Array.isArray(imageUrls) || imageUrls.length === 0) {
-            return res.status(400).json({ error: 'Dữ liệu không hợp lệ: imagePaths phải là mảng không rỗng và threadId là bắt buộc' });
-        }
-
-
-        const imagePaths = [];
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.Group);
         for (const imageUrl of imageUrls) {
             const imagePath = await saveImage(imageUrl);
             if (!imagePath) {
-                // Clean up any saved images
-                for (const path of imagePaths) {
-                    removeImage(path);
-                }
+                for (const savedPath of imagePaths) removeImage(savedPath);
                 return res.status(500).json({ success: false, error: 'Failed to save one or more images' });
             }
             imagePaths.push(imagePath);
         }
 
-        const account = zaloAccounts.find(acc => acc.ownId === ownId);
-        if (!account) {
-            return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
-        }
-
         const result = await account.api.sendMessage(
-            {
-                msg: "",
-                attachments: imagePaths
-            },
-            threadId,
+            { msg: '', attachments: imagePaths },
+            String(threadId),
             ThreadType.Group
-        ).catch(console.error);
+        );
 
-        for (const imagePath of imagePaths) {
-            removeImage(imagePath);
-        }
-        res.json({ success: true, data: result });
+        for (const imagePath of imagePaths) removeImage(imagePath);
+        imagePaths.length = 0;
+        res.json({ success: true, data: result, autoDelete });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        for (const imagePath of imagePaths) removeImage(imagePath);
+        const status = /ttl/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
 export async function sendFile(req, res) {
     let filePath;
     try {
-        const { fileUrl, threadId, ownId, type, message } = req.body;
+        const { fileUrl, threadId, ownId, type, message, ttl } = req.body;
         if (!fileUrl || !threadId || !ownId) {
             return res.status(400).json({ error: 'Dữ liệu không hợp lệ: fileUrl, threadId và ownId là bắt buộc' });
         }
 
+        const account = zaloAccounts.find(acc => acc.ownId === ownId);
+        if (!account) {
+            return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
+        }
+
+        const threadType = normalizeThreadType(type, ThreadType);
+        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, threadType);
         filePath = await saveFileFromUrl(fileUrl);
         if (!filePath) {
             return res.status(500).json({ success: false, error: 'Không thể tải và lưu file' });
         }
 
-        const account = zaloAccounts.find(acc => acc.ownId === ownId);
-        if (!account) {
-            removeFile(filePath);
-            return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
-        }
-
-        const threadType = type === 'group' ? ThreadType.Group : ThreadType.User;
         const result = await account.api.sendMessage(
-            {
-                msg: message || "",
-                attachments: [filePath]
-            },
-            threadId,
+            { msg: message || '', attachments: [filePath] },
+            String(threadId),
             threadType
         );
 
         removeFile(filePath);
-        res.json({ success: true, data: result });
+        filePath = null;
+        res.json({ success: true, data: result, autoDelete });
     } catch (error) {
         if (filePath) removeFile(filePath);
-        res.status(500).json({ success: false, error: error.message });
+        const status = /ttl|type không hợp lệ/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
