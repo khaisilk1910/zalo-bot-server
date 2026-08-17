@@ -1,0 +1,23 @@
+
+# Node
+node_modules/
+npm-debug.log*
+*.log
+
+# Runtime data
+data/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+config/.env
+
+# Private webhook configuration
+config/webhookConfig.json
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

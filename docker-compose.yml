@@ -1,0 +1,13 @@
+services:
+  zalobot:
+    image: ghcr.io/khaisilk1910/zalobot-amd64:latest
+    container_name: zalo
+    restart: unless-stopped
+    network_mode: host
+
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
+
+    volumes:
+      - /opt/home-assistant/config/zalo_bot:/app/data
+      - /opt/home-assistant/config/www/zalo_bot:/config/www/zalo_bot
