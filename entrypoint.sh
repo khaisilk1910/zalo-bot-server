@@ -2,8 +2,15 @@
 
 # Cài đặt jq nếu chưa có
 if ! command -v jq >/dev/null 2>&1; then
-  echo "Installing jq..."
-  apt-get update && apt-get install -y jq
+  echo "jq not found; installing..."
+  if command -v apk >/dev/null 2>&1; then
+    apk add --no-cache jq
+  elif command -v apt-get >/dev/null 2>&1; then
+    apt-get update && apt-get install -y jq
+  else
+    echo "ERROR: cannot install jq on this image" >&2
+    exit 1
+  fi
 fi
 
 # Kiểm tra và tạo thư mục dữ liệu
@@ -99,21 +106,21 @@ fi
 # Kiểm tra quyền truy cập vào thư mục dữ liệu mà không thay đổi quyền
 echo "Checking access to data directory: $DATA_DIRECTORY"
 
-# Hiển thị nội dung thư mục dữ liệu để gỡ lỗi
-echo "Contents of data directory:"
-ls -la "$DATA_DIRECTORY"
-
-# Kiểm tra quyền ghi mà không tạo file thực tế
-if [ -w "$DATA_DIRECTORY" ]; then
-  echo "Write permission check: OK - Directory is writable"
-else
-  echo "Write permission check: WARNING - Directory may not be writable"
-  echo "Application may have limited functionality but will try to continue"
+# Chỉ dump danh sách file khi chủ động bật debug để tránh log ồn và lộ metadata.
+if [ "${DEBUG_STARTUP:-false}" = "true" ]; then
+  echo "Contents of data directory:"
+  ls -la "$DATA_DIRECTORY"
+  if [ -d "$DATA_DIRECTORY/cookies" ]; then
+    echo "Contents of cookies directory:"
+    ls -la "$DATA_DIRECTORY/cookies"
+  fi
 fi
 
-if [ -d "$DATA_DIRECTORY/cookies" ]; then
-  echo "Contents of cookies directory:"
-  ls -la "$DATA_DIRECTORY/cookies"
+# Kiểm tra quyền ghi.
+if [ -w "$DATA_DIRECTORY" ]; then
+  echo "Write permission check: OK"
+else
+  echo "Write permission check: WARNING - Directory may not be writable"
 fi
 
 # Hiển thị các biến môi trường quan trọng
@@ -121,7 +128,11 @@ echo "Environmental variables:"
 echo "DATA_DIRECTORY=$DATA_DIRECTORY"
 echo "NODE_ENV=$NODE_ENV"
 echo "PORT=$PORT"
-echo "MESSAGE_WEBHOOK_URL=${MESSAGE_WEBHOOK_URL:-not set}"
+if [ -n "${MESSAGE_WEBHOOK_URL:-}" ]; then
+  echo "MESSAGE_WEBHOOK_URL=configured"
+else
+  echo "MESSAGE_WEBHOOK_URL=not-set"
+fi
 echo "-------------------------------------"
 
 # Đảm bảo DATA_DIRECTORY được truyền vào Node.js

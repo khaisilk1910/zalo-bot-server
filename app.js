@@ -1,7 +1,6 @@
 // app.js
 import express from 'express';
 import session from 'express-session';
-import cookieParser from 'cookie-parser';
 import { authMiddleware, isPublicRoute } from './services/authService.js';
 import { loadWebhookConfig } from './services/webhookService.js';
 import routes from './routes/index.js';
@@ -9,8 +8,11 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 import { loadHomeAssistantOptions } from './config/addon.js';
 import { zaloAccounts, loginZaloAccount } from './api/zalo/zalo.js';
+import { FileSessionStore } from './services/fileSessionStore.js';
+import { writeFileAtomicSync } from './utils/atomicFile.js';
 
 // Dành cho ES Module: xác định __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -45,17 +47,26 @@ try {
 dotenv.config({ path: path.join(__dirname, 'config', '.env') });
 
 const app = express();
+app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  next();
+});
 
 // Cấu hình EJS
 app.set('view engine', 'ejs');
 const viewsPath = path.join(__dirname, 'views');
-console.log('Views path:', viewsPath);
+if (process.env.DEBUG_STARTUP === 'true') console.log('Views path:', viewsPath);
 app.set('views', viewsPath);
 
 // Kiểm tra thư mục views
 if (fs.existsSync(viewsPath)) {
-  const files = fs.readdirSync(viewsPath);
-  console.log('Views directory exists. Files:', files);
+  if (process.env.DEBUG_STARTUP === 'true') {
+    const files = fs.readdirSync(viewsPath);
+    console.log('Views directory exists. Files:', files);
+  }
 } else {
   console.error('Views directory does not exist at', viewsPath);
   // Nếu không tồn tại, thử tạo thư mục
@@ -72,13 +83,12 @@ loadWebhookConfig();
 console.log("Đã tải cấu hình webhook");
 
 // Thiết lập middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true })); // Dùng để parse dữ liệu form
-app.use(cookieParser());
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: process.env.FORM_BODY_LIMIT || '2mb' }));
 
 // Thiết lập middleware phục vụ file tĩnh
 // Sử dụng thư mục /config/www/zalo_bot cho file tĩnh (đồng bộ với custom component)
-const publicDir = '/config/www/zalo_bot';
+const publicDir = process.env.PUBLIC_DIR || '/config/www/zalo_bot';
 // Đảm bảo thư mục tồn tại
 if (!fs.existsSync(publicDir)) {
   console.log(`Thư mục public ${publicDir} không tồn tại, đang tạo mới...`);
@@ -89,52 +99,81 @@ if (!fs.existsSync(publicDir)) {
     console.error(`Lỗi khi tạo thư mục public: ${error.message}`);
   }
 }
-app.use(express.static(publicDir));
+app.use(express.static(publicDir, {
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store')
+}));
 // Tương thích ngược với đường dẫn cũ
 app.use(express.static(path.join(__dirname, 'public')));
 // Đảm bảo có thể truy cập qua /zalo_bot/* để tương thích với code hiện tại
-app.use('/zalo_bot', express.static(publicDir));
-console.log('Static files path:', publicDir, 'và', path.join(__dirname, 'public'));
-console.log('Đường dẫn URL cho files:', '/* và /zalo_bot/*');
-
-// Định nghĩa SESSION_SECRET từ biến môi trường hoặc mặc định
-const sessionSecret = process.env.SESSION_SECRET || 'zalo-server-secret-key';
-console.log("Using session secret:", sessionSecret ? "Configured properly" : "MISSING SESSION SECRET");
-
-// Thiết lập session với cấu hình rõ ràng hơn
-app.use(session({
-  secret: sessionSecret,
-  resave: true, // Thay đổi thành true để đảm bảo session được lưu lại sau mỗi request
-  saveUninitialized: true, // Thay đổi thành true để đảm bảo session được lưu ngay cả khi chưa có dữ liệu
-  name: 'zalo-server.sid', // Tên cookie cụ thể
-  cookie: {
-    secure: false, // false để hoạt động với HTTP
-    httpOnly: true, // Chỉ truy cập được qua HTTP, không qua JS
-    maxAge: 24 * 60 * 60 * 1000, // 24 giờ
-    path: '/',
-    sameSite: 'lax' // Thêm cấu hình sameSite để tránh vấn đề với cross-site
-  },
-  rolling: true // Session được làm mới mỗi request
+app.use('/zalo_bot', express.static(publicDir, {
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store')
 }));
+if (process.env.DEBUG_STARTUP === 'true') {
+  console.log('Static files path:', publicDir, 'và', path.join(__dirname, 'public'));
+  console.log('Đường dẫn URL cho files:', '/* và /zalo_bot/*');
+}
 
-// Log để debug session
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-  console.log('Session exists:', !!req.session);
-  next();
+// Session secret: ưu tiên biến môi trường; nếu không có thì tạo một secret bền vững
+// trong DATA_DIRECTORY để restart container không làm mất toàn bộ session.
+function getSessionSecret() {
+  if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.length >= 32) {
+    return process.env.SESSION_SECRET;
+  }
+
+  const secretPath = path.join(dataDirectory, 'session-secret');
+  try {
+    if (fs.existsSync(secretPath)) {
+      const existing = fs.readFileSync(secretPath, 'utf8').trim();
+      if (existing.length >= 32) return existing;
+    }
+
+    const generated = crypto.randomBytes(48).toString('hex');
+    writeFileAtomicSync(secretPath, generated);
+    try { fs.chmodSync(secretPath, 0o600); } catch {}
+    console.log(`[Session] Đã tạo session secret bền vững tại ${secretPath}`);
+    return generated;
+  } catch (error) {
+    console.warn(`[Session] Không thể lưu session secret: ${error.message}. Dùng secret tạm thời.`);
+    return crypto.randomBytes(48).toString('hex');
+  }
+}
+
+const sessionSecret = getSessionSecret();
+const sessionStore = new FileSessionStore({ dir: path.join(dataDirectory, 'sessions') });
+
+if (process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true') {
+  app.set('trust proxy', 1);
+}
+
+export const sessionMiddleware = session({
+  store: sessionStore,
+  secret: sessionSecret,
+  resave: false,
+  saveUninitialized: false,
+  name: 'zalo-server.sid',
+  cookie: {
+    secure: process.env.SESSION_COOKIE_SECURE === 'true',
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000,
+    path: '/',
+    sameSite: 'lax'
+  },
+  rolling: true
 });
+app.use(sessionMiddleware);
+
+// Request log chỉ bật khi cần debug để tránh I/O log trên mọi API call.
+if (process.env.DEBUG_HTTP === 'true') {
+  app.use((req, _res, next) => {
+    console.log(`[HTTP] ${req.method} ${req.path}`);
+    next();
+  });
+}
 
 // Middleware xác thực cho tất cả các route trừ những route công khai
 app.use((req, res, next) => {
-  // Bỏ qua xác thực cho các API route và các route công khai
-  if (isPublicRoute(req.path)) {
-    console.log(`Skipping auth for public route: ${req.path}`);
-    return next();
-  }
-
-  // Áp dụng middleware xác thực cho các route khác
-  console.log(`Applying auth middleware for protected route: ${req.path}`);
-  authMiddleware(req, res, next);
+  if (isPublicRoute(req.path)) return next();
+  return authMiddleware(req, res, next);
 });
 
 // Thiết lập route
@@ -146,59 +185,52 @@ import { getCookiesDir } from './utils/helpers.js';
 const cookiesDir = getCookiesDir();
 console.log(`Thư mục cookies được cấu hình: ${cookiesDir}`);
 
-if (fs.existsSync(cookiesDir)) {
-    try {
-        const cookieFiles = fs.readdirSync(cookiesDir);
-        console.log(`Tìm thấy ${cookieFiles.length} file cookie trong thư mục ${cookiesDir}`);
-        
-        if (zaloAccounts.length < cookieFiles.length) {
-            console.log('Số lượng tài khoản Zalo nhỏ hơn số lượng cookie files. Đang đăng nhập lại từ cookie...');
+async function restoreSavedAccounts() {
+  let cookieFiles = [];
+  try {
+    cookieFiles = fs.readdirSync(cookiesDir)
+      .filter((file) => file.startsWith('cred_') && file.endsWith('.json'));
+  } catch (error) {
+    console.error(`[Restore] Không thể đọc ${cookiesDir}:`, error.message);
+    return;
+  }
 
-            // Sử dụng IIFE để tránh top-level await
-            (async function() {
-                for (const file of cookieFiles) {
-                    if (file.startsWith('cred_') && file.endsWith('.json')) {
-                        const ownId = file.substring(5, file.length - 5, file.length);
-                        try {
-                            const cookiePath = path.join(cookiesDir, file);
-                            if (fs.existsSync(cookiePath)) {
-                                const cookie = JSON.parse(fs.readFileSync(cookiePath, "utf-8"));
-                                try {
-                                    const hasSavedProxy = Object.prototype.hasOwnProperty.call(cookie, 'proxy');
-                                    const savedProxy = hasSavedProxy ? (cookie.proxy || null) : null;
+  if (cookieFiles.length === 0) return;
+  console.log(`[Restore] Tìm thấy ${cookieFiles.length} credential, bắt đầu khôi phục.`);
 
-                                    await loginZaloAccount(savedProxy, cookie, {
-                                        // Restore tự động không được tạo QR; nếu Zalo tạm lỗi thì giữ cookie.
-                                        allowQrFallback: false,
-                                        // Credential v1.0.1 đã biết chính xác proxy (kể cả null = không proxy).
-                                        // Credential legacy chưa có `proxy` vẫn dùng cơ chế chọn proxy cũ một lần.
-                                        autoSelectProxy: !hasSavedProxy
-                                    });
-                                    console.log(`Đã đăng nhập lại tài khoản ${ownId} từ cookie.`);
-                                } catch (loginError) {
-                                    console.error(`Lỗi khi đăng nhập lại tài khoản ${ownId} từ cookie; credential vẫn được giữ nguyên:`, loginError);
-                                }
-                            } else {
-                                console.log(`Không tìm thấy file cookie: ${cookiePath}`);
-                            }
-                        } catch (error) {
-                            console.error(`Lỗi khi đọc/xử lý cookie cho tài khoản ${ownId}:`, error);
-                        }
-                    }
-                }
-            })().catch(err => {
-                console.error('Lỗi khi xử lý đăng nhập từ cookie:', err);
-            });
-        }
-    } catch (dirError) {
-        console.error(`Lỗi khi đọc thư mục cookies:`, dirError);
+  const concurrency = Math.min(3, cookieFiles.length);
+  let index = 0;
+  async function worker() {
+    while (true) {
+      const current = index++;
+      if (current >= cookieFiles.length) return;
+      const file = cookieFiles[current];
+      const ownId = file.slice(5, -5);
+      try {
+        const cookiePath = path.join(cookiesDir, file);
+        const credential = JSON.parse(fs.readFileSync(cookiePath, 'utf8'));
+        const hasSavedProxy = Object.prototype.hasOwnProperty.call(credential, 'proxy');
+        const savedProxy = hasSavedProxy ? (credential.proxy || null) : null;
+        await loginZaloAccount(savedProxy, credential, {
+          allowQrFallback: false,
+          autoSelectProxy: !hasSavedProxy,
+        });
+        console.log(`[Restore] Đã khôi phục tài khoản ${ownId}.`);
+      } catch (error) {
+        console.error(`[Restore] Không thể khôi phục ${ownId}; credential vẫn được giữ:`, error.message || error);
+      }
     }
-} else {
-    console.log(`Thư mục cookies không tồn tại: ${cookiesDir}. Đang tạo mới...`);
-    fs.mkdirSync(cookiesDir, { recursive: true });
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  console.log(`[Restore] Hoàn tất. Có ${zaloAccounts.length} tài khoản trong bộ nhớ.`);
 }
 
-// In ra thông tin về biến môi trường dữ liệu
-console.log('DATA_DIRECTORY from process.env:', process.env.DATA_DIRECTORY);
+if (!fs.existsSync(cookiesDir)) fs.mkdirSync(cookiesDir, { recursive: true });
+void restoreSavedAccounts().catch((error) => console.error('[Restore] Lỗi ngoài dự kiến:', error));
+
+if (process.env.DEBUG_STARTUP === 'true') {
+  console.log('DATA_DIRECTORY from process.env:', process.env.DATA_DIRECTORY);
+}
 
 export default app;

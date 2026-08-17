@@ -1,75 +1,122 @@
-// server.js
 import http from 'http';
 import { WebSocketServer } from 'ws';
-import app from './app.js';
+import app, { sessionMiddleware } from './app.js';
 import { getDataDirectory } from './config/addon.js';
+import {
+  registerWebSocketClient,
+  closeAllWebSocketClients,
+} from './services/websocketHub.js';
+import { flushAllGroupHistorySync } from './utils/groupHistoryStore.js';
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const dataDir = getDataDirectory();
 
-console.log(`=========================================`);
-console.log(`Khởi động server với thông số:`);
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
+  throw new Error(`PORT không hợp lệ: ${process.env.PORT}`);
+}
+
+console.log('=========================================');
+console.log('Khởi động server với thông số:');
 console.log(`- Port: ${PORT}`);
 console.log(`- Thư mục dữ liệu: ${dataDir}`);
-console.log(`- Webhook URLs: ${process.env.MESSAGE_WEBHOOK_URL || 'không cấu hình'}`);
-console.log(`=========================================`);
+console.log('=========================================');
 
-// Tạo HTTP server
 const server = http.createServer(app);
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: 1024 * 1024,
+  maxFragments: 1024,
+  maxBufferedChunks: 4096,
+});
 
-// Tạo WebSocket server
-const wss = new WebSocketServer({ server });
+server.on('upgrade', (request, socket, head) => {
+  let pathname;
+  try {
+    pathname = new URL(request.url, 'http://localhost').pathname;
+  } catch {
+    socket.destroy();
+    return;
+  }
+  if (pathname !== '/ws') {
+    socket.destroy();
+    return;
+  }
 
-// Lưu trữ kết nối WebSocket
-export const webSocketClients = new Set();
-
-// Xử lý kết nối WebSocket
-wss.on('connection', (ws) => {
-  console.log('Có một kết nối WebSocket mới');
-  webSocketClients.add(ws);
-  
-  ws.on('close', () => {
-    console.log('Kết nối WebSocket đã đóng');
-    webSocketClients.delete(ws);
+  // Parse the exact same express-session cookie used by the HTTP UI/API.
+  // ws officially recommends authenticating in the upgrade event.
+  sessionMiddleware(request, {}, () => {
+    if (!request.session?.authenticated) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
   });
 });
 
-// Hàm gửi thông báo đến tất cả client WebSocket
-export function broadcastMessage(message) {
-  webSocketClients.forEach((client) => {
-    if (client.readyState === 1) { // 1 = OPEN
-      client.send(message);
+wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+  registerWebSocketClient(ws);
+});
+
+// Reap half-open/stale WebSocket connections so dashboards/reloads do not leak
+// client objects indefinitely after Wi-Fi/browser disconnects.
+const wsHeartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) {
+      ws.terminate();
+      continue;
     }
+    ws.isAlive = false;
+    try { ws.ping(); } catch { ws.terminate(); }
+  }
+}, 30_000);
+wsHeartbeat.unref?.();
+wss.on('close', () => clearInterval(wsHeartbeat));
+
+wss.on('error', (error) => {
+  console.error('[WebSocket] Server error:', error.message || error);
+});
+
+server.on('error', (error) => {
+  console.error('[HTTP] Server error:', error);
+});
+
+server.keepAliveTimeout = Number.parseInt(process.env.KEEP_ALIVE_TIMEOUT_MS || '65000', 10);
+server.headersTimeout = Math.max(server.keepAliveTimeout + 5000, 70000);
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server đang chạy trên port ${PORT}`);
+});
+
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[Shutdown] Nhận ${signal}, đang dọn dẹp...`);
+  flushAllGroupHistorySync();
+  closeAllWebSocketClients();
+  wss.close();
+
+  const forceTimer = setTimeout(() => {
+    console.error('[Shutdown] Buộc dừng do quá thời gian chờ.');
+    process.exit(1);
+  }, 10_000);
+  forceTimer.unref();
+
+  server.close((error) => {
+    clearTimeout(forceTimer);
+    if (error) {
+      console.error('[Shutdown] Lỗi đóng HTTP server:', error);
+      process.exit(1);
+    }
+    console.log('[Shutdown] Server đã đóng an toàn.');
+    process.exit(0);
   });
 }
 
-// Sử dụng HTTP server thay vì app để hỗ trợ WebSocket
-server.listen(PORT, () => {
-  console.log(`Server đang chạy tại http://localhost:${PORT}`);
-});
-
-// Xử lý tín hiệu tắt server một cách an toàn
-process.on('SIGTERM', () => {
-  console.log('Nhận tín hiệu SIGTERM (container đang dừng). Đang dọn dẹp...');
-  
-  // Đóng server một cách an toàn
-  server.close(() => {
-    console.log('Server HTTP đã đóng.');
-    process.exit(0);
-  });
-  
-  // Đảm bảo tắt sau 10 giây nếu đóng server bị treo
-  setTimeout(() => {
-    console.error('Tắt server bị buộc do quá thời gian chờ.');
-    process.exit(1);
-  }, 10000);
-});
-
-process.on('SIGINT', () => {
-  console.log('Nhận tín hiệu SIGINT (Ctrl+C). Đang dọn dẹp...');
-  
-  server.close(() => {
-    console.log('Server HTTP đã đóng.');
-    process.exit(0);
-  });
-});
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => shutdown('SIGINT'));

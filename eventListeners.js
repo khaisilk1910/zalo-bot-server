@@ -2,8 +2,21 @@ import { getWebhookUrl, triggerN8nWebhook, getCookiesDir } from './utils/helpers
 import { broadcastToWebsocket } from './services/webhookService.js';
 import fs from 'fs';
 import path from 'path';
-import { loginZaloAccount, zaloAccounts } from './api/zalo/zalo.js';
-import { broadcastMessage } from './server.js';
+import { broadcastMessage } from './services/websocketHub.js';
+import { ThreadType } from 'zca-js';
+import { storeGroupMessage } from './utils/groupHistoryStore.js';
+
+
+let reconnectLogin = null;
+let accountRegistry = [];
+
+export function configureReconnectDependencies({ login, accounts }) {
+    if (typeof login !== 'function' || !Array.isArray(accounts)) {
+        throw new Error('Reconnect dependencies không hợp lệ');
+    }
+    reconnectLogin = login;
+    accountRegistry = accounts;
+}
 
 // Theo dõi thời điểm reconnect gần nhất (giữ export để tương thích code cũ nếu có).
 export const reloginAttempts = new Map();
@@ -11,6 +24,16 @@ export const reloginAttempts = new Map();
 // Backoff: 5s -> 15s -> 30s -> 60s -> 120s -> 300s; sau đó tiếp tục 300s/lần.
 const RECONNECT_DELAYS = [5000, 15000, 30000, 60000, 120000, 300000];
 const reconnectStates = new Map();
+
+function describeProxy(proxy) {
+    if (!proxy) return 'không proxy';
+    try {
+        const parsed = new URL(proxy);
+        return `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ''}`;
+    } catch {
+        return 'proxy đã cấu hình';
+    }
+}
 
 function clearReconnectState(ownId) {
     const state = reconnectStates.get(ownId);
@@ -29,7 +52,7 @@ function scheduleRelogin(api, immediate = false) {
     }
 
     // Nếu account đã được thay bằng API mới thì bỏ qua event closed cũ.
-    const currentAccount = zaloAccounts.find(acc => acc.ownId === ownId);
+    const currentAccount = accountRegistry.find(acc => acc.ownId === ownId);
     if (currentAccount?.api && currentAccount.api !== api) {
         console.log(`[Reconnect] Bỏ qua listener cũ của ${ownId}; account đã có API mới.`);
         return;
@@ -64,7 +87,7 @@ async function attemptRelogin(ownId) {
     reloginAttempts.set(ownId, Date.now());
 
     try {
-        const accountInfo = zaloAccounts.find(acc => acc.ownId === ownId);
+        const accountInfo = accountRegistry.find(acc => acc.ownId === ownId);
 
         // Nếu một API mới đã thay thế API gây disconnect thì reconnect đã thành công ở nơi khác.
         if (accountInfo?.api && state.sourceApi && accountInfo.api !== state.sourceApi) {
@@ -95,9 +118,10 @@ async function attemptRelogin(ownId) {
         // không tự chọn proxy khác. Credential legacy không có thông tin mới cho phép auto-select.
         const autoSelectProxy = !(credentialHasProxy || accountHasProxy);
 
-        console.log(`[Reconnect] Đang đăng nhập lại ${ownId} với ${savedProxy || 'không proxy'}...`);
+        console.log(`[Reconnect] Đang đăng nhập lại ${ownId} với ${describeProxy(savedProxy)}...`);
 
-        await loginZaloAccount(savedProxy, savedCredential, {
+        if (!reconnectLogin) throw new Error('Reconnect chưa được khởi tạo');
+        await reconnectLogin(savedProxy, savedCredential, {
             allowQrFallback: false,
             autoSelectProxy
         });
@@ -119,6 +143,19 @@ export function setupEventListeners(api, loginResolve) {
     const ownId = api.getOwnId();
 
     api.listener.on('message', (msg) => {
+        // v1.0.4: Zalo đã gỡ endpoint group history. Lưu các message group
+        // mà listener quan sát được vào DATA_DIRECTORY để getGroupChatHistory
+        // vẫn hoạt động bền vững qua restart container.
+        if (Number(msg?.type) === ThreadType.Group) {
+            storeGroupMessage(ownId, msg);
+        }
+
+        // selfListen được bật chỉ để cache được cả tin do chính account gửi.
+        // Giữ nguyên hành vi webhook/WebSocket cũ: không phát sinh event self mới.
+        if (msg?.isSelf) {
+            return;
+        }
+
         const messageWebhookUrl = getWebhookUrl('messageWebhookUrl', ownId);
         const msgWithOwnId = { ...msg, _accountId: ownId };
 
@@ -142,7 +179,9 @@ export function setupEventListeners(api, loginResolve) {
 
     api.listener.on('reaction', (reaction) => {
         const reactionWebhookUrl = getWebhookUrl('reactionWebhookUrl', ownId);
-        console.log('Nhận reaction:', reaction);
+        if (process.env.DEBUG_EVENTS === 'true') {
+            console.log('[Event] Nhận reaction cho account', ownId);
+        }
         if (reactionWebhookUrl) {
             const reactionWithOwnId = { ...reaction, _accountId: ownId };
             triggerN8nWebhook(reactionWithOwnId, reactionWebhookUrl);

@@ -1,24 +1,54 @@
 // api/zalo/zalo.js
 import { Zalo, ThreadType } from 'zca-js';
-import { getPROXIES, getAvailableProxyIndex } from '../../services/proxyService.js';
-import { setupEventListeners } from '../../eventListeners.js';
+import { getAvailableProxyIndex, getProxyRef, markProxyAccount, addProxy, getPROXIES } from '../../services/proxyService.js';
+import { setupEventListeners, configureReconnectDependencies } from '../../eventListeners.js';
 import { HttpsProxyAgent } from "https-proxy-agent";
+import { imageSizeFromFile } from "image-size/fromFile";
 import nodefetch from "node-fetch";
 import fs from 'fs';
 import path from 'path';
-import { saveImage, removeImage, saveFileFromUrl, removeFile } from '../../utils/helpers.js';
+import { saveImage, saveImages, removeImage, saveFileFromUrl, removeFile } from '../../utils/helpers.js';
+import { writeJsonAtomicSync } from '../../utils/atomicFile.js';
 import { applyAutoDeleteIfRequested, getRequestedAutoDeleteTtl, normalizeAutoDeleteTtl, normalizeThreadType, stripLegacyMessageTtl } from '../../utils/autoDelete.js';
+import { getCachedGroupHistory } from '../../utils/groupHistoryStore.js';
 
 export const zaloAccounts = [];
+// Inject reconnect dependencies instead of importing zalo.js back from eventListeners.js.
+// This removes the circular ESM dependency between login and listener modules.
+configureReconnectDependencies({
+    accounts: zaloAccounts,
+    login: (...args) => loginZaloAccount(...args),
+});
+let healthCheckRunning = false;
+
+async function withTimeout(promise, timeoutMs, label = 'Operation timeout') {
+    let timer;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error(label)), timeoutMs);
+            })
+        ]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
 
 // Chức năng tự động kiểm tra trạng thái đăng nhập (10 phút/lần)
 // v1.0.1: Health-check chỉ quan sát trạng thái. KHÔNG xóa cookie hoặc tài khoản
 // khi gặp timeout/lỗi mạng tạm thời, để cơ chế reconnect có thể tự phục hồi.
 async function checkLoginStatus() {
+    if (healthCheckRunning) {
+        console.log('[Docker] Bỏ qua health-check vì lần trước vẫn đang chạy.');
+        return;
+    }
+    healthCheckRunning = true;
     console.log("[Docker] Đang kiểm tra trạng thái đăng nhập của tất cả tài khoản...");
 
     if (zaloAccounts.length === 0) {
         console.log("[Docker] Không có tài khoản nào để kiểm tra");
+        healthCheckRunning = false;
         return;
     }
 
@@ -31,12 +61,11 @@ async function checkLoginStatus() {
         }
 
         try {
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Health-check timeout')), 30000)
+            const accountInfo = await withTimeout(
+                account.api.fetchAccountInfo(),
+                30_000,
+                'Health-check timeout'
             );
-
-            const accountInfoPromise = account.api.fetchAccountInfo();
-            const accountInfo = await Promise.race([accountInfoPromise, timeoutPromise]);
 
             if (accountInfo?.profile) {
                 console.log(`[Docker] Tài khoản ${accountLabel} vẫn đăng nhập thành công`);
@@ -58,6 +87,8 @@ async function checkLoginStatus() {
         console.log(`[Docker] Hoàn thành kiểm tra: ${healthyCount} khỏe, ${unhealthyCount} cần theo dõi. Cookie được giữ nguyên.`);
     } catch (error) {
         console.error("[Docker] Lỗi khi xử lý kết quả kiểm tra:", error);
+    } finally {
+        healthCheckRunning = false;
     }
 }
 
@@ -76,7 +107,9 @@ export function startLoginCheck() {
     // Thiết lập kiểm tra định kỳ mỗi 10 phút
     checkLoginInterval = setInterval(() => {
         try {
-            checkLoginStatus();
+            void checkLoginStatus().catch((error) => {
+                console.error('[Docker] Health-check async error:', error);
+            });
         } catch (error) {
             console.error("[Docker] Lỗi khi chạy kiểm tra đăng nhập:", error);
         }
@@ -499,14 +532,12 @@ export async function sendImagesToUserByAccount(req, res) {
         const account = getAccountFromSelection(accountSelection);
         const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.User);
 
-        for (const imageUrl of imageUrls) {
-            const imagePath = await saveImage(imageUrl);
-            if (!imagePath) {
-                for (const savedPath of imagePaths) removeImage(savedPath);
-                return res.status(500).json({ success: false, error: 'Không thể lưu một hoặc nhiều hình ảnh' });
-            }
-            imagePaths.push(imagePath);
+        const downloadedImages = await saveImages(imageUrls);
+        if (downloadedImages.some((imagePath) => !imagePath)) {
+            for (const savedPath of downloadedImages.filter(Boolean)) removeImage(savedPath);
+            return res.status(500).json({ success: false, error: 'Không thể lưu một hoặc nhiều hình ảnh' });
         }
+        imagePaths.push(...downloadedImages);
 
         const result = await account.api.sendMessage(
             { msg: '', attachments: imagePaths },
@@ -581,14 +612,12 @@ export async function sendImagesToGroupByAccount(req, res) {
         const account = getAccountFromSelection(accountSelection);
         const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.Group);
 
-        for (const imageUrl of imageUrls) {
-            const imagePath = await saveImage(imageUrl);
-            if (!imagePath) {
-                for (const savedPath of imagePaths) removeImage(savedPath);
-                return res.status(500).json({ success: false, error: 'Không thể lưu một hoặc nhiều hình ảnh' });
-            }
-            imagePaths.push(imagePath);
+        const downloadedImages = await saveImages(imageUrls);
+        if (downloadedImages.some((imagePath) => !imagePath)) {
+            for (const savedPath of downloadedImages.filter(Boolean)) removeImage(savedPath);
+            return res.status(500).json({ success: false, error: 'Không thể lưu một hoặc nhiều hình ảnh' });
         }
+        imagePaths.push(...downloadedImages);
 
         const result = await account.api.sendMessage(
             { msg: '', attachments: imagePaths },
@@ -799,6 +828,63 @@ export async function getFriendRecommendationsByAccount(req, res) {
         res.json({
             success: true,
             data: result,
+            usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function getReceivedFriendRequestsByAccount(req, res) {
+    try {
+        const { accountSelection } = req.body;
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getFriendRecommendations();
+
+        const recommItems = Array.isArray(result?.recommItems) ? result.recommItems : [];
+        const receivedItems = recommItems.filter((item) => {
+            const recommType = item?.dataInfo?.recommType ?? item?.recommType;
+            return Number(recommType) === 2;
+        });
+
+        res.json({
+            success: true,
+            data: {
+                ...result,
+                recommItems: receivedItems,
+                total: receivedItems.length
+            },
+            usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function getGroupChatHistoryByAccount(req, res) {
+    try {
+        const { groupId, count = 50, accountSelection } = req.body;
+        if (!groupId) {
+            return res.status(400).json({ success: false, error: 'groupId là bắt buộc' });
+        }
+
+        const parsedCount = Number.parseInt(count, 10);
+        if (!Number.isFinite(parsedCount) || parsedCount < 1 || parsedCount > 200) {
+            return res.status(400).json({
+                success: false,
+                error: 'count phải là số nguyên từ 1 đến 200'
+            });
+        }
+
+        const account = getAccountFromSelection(accountSelection);
+        const result = getCachedGroupHistory(account.ownId, groupId, parsedCount);
+
+        res.json({
+            success: true,
+            data: result,
+            warning: result.cachedCount === 0
+                ? 'Chưa có lịch sử local cho nhóm này. History bắt đầu được lưu từ zalo-server v1.0.4 khi listener nhận được tin nhắn.'
+                : undefined,
             usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
         });
     } catch (error) {
@@ -2099,14 +2185,12 @@ export async function sendImagesToUser(req, res) {
         }
 
         const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.User);
-        for (const imageUrl of imageUrls) {
-            const imagePath = await saveImage(imageUrl);
-            if (!imagePath) {
-                for (const savedPath of imagePaths) removeImage(savedPath);
-                return res.status(500).json({ success: false, error: 'Failed to save one or more images' });
-            }
-            imagePaths.push(imagePath);
+        const downloadedImages = await saveImages(imageUrls);
+        if (downloadedImages.some((imagePath) => !imagePath)) {
+            for (const savedPath of downloadedImages.filter(Boolean)) removeImage(savedPath);
+            return res.status(500).json({ success: false, error: 'Failed to save one or more images' });
         }
+        imagePaths.push(...downloadedImages);
 
         const result = await account.api.sendMessage(
             { msg: '', attachments: imagePaths },
@@ -2171,14 +2255,12 @@ export async function sendImagesToGroup(req, res) {
         }
 
         const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.Group);
-        for (const imageUrl of imageUrls) {
-            const imagePath = await saveImage(imageUrl);
-            if (!imagePath) {
-                for (const savedPath of imagePaths) removeImage(savedPath);
-                return res.status(500).json({ success: false, error: 'Failed to save one or more images' });
-            }
-            imagePaths.push(imagePath);
+        const downloadedImages = await saveImages(imageUrls);
+        if (downloadedImages.some((imagePath) => !imagePath)) {
+            for (const savedPath of downloadedImages.filter(Boolean)) removeImage(savedPath);
+            return res.status(500).json({ success: false, error: 'Failed to save one or more images' });
         }
+        imagePaths.push(...downloadedImages);
 
         const result = await account.api.sendMessage(
             { msg: '', attachments: imagePaths },
@@ -2232,6 +2314,16 @@ export async function sendFile(req, res) {
     }
 }
 
+function describeProxy(proxy) {
+    if (!proxy) return 'không proxy';
+    try {
+        const parsed = new URL(proxy);
+        return `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ''}`;
+    } catch {
+        return 'proxy đã cấu hình';
+    }
+}
+
 export async function loginZaloAccount(customProxy, cred, options = {}) {
     const {
         allowQrFallback = true,
@@ -2247,7 +2339,7 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
     let loginResolve;
     return new Promise(async (resolve, reject) => {
         console.log('Bắt đầu quá trình đăng nhập Zalo...');
-        console.log('Custom proxy:', customProxy || 'không có');
+        console.log('Custom proxy:', describeProxy(customProxy));
         console.log('Đang nhập với cookie:', loginCredential ? 'có' : 'không');
         console.log('Cho phép fallback QR:', allowQrFallback ? 'có' : 'không');
         console.log('Tự động chọn proxy:', autoSelectProxy ? 'có' : 'không');
@@ -2256,69 +2348,35 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
         let agent;
         let proxyUsed = null;
         let useCustomProxy = false;
-        let proxies = [];
-        
-        // Import hàm getProxiesFilePath
-        const { getProxiesFilePath } = await import('../../utils/helpers.js');
-        const proxiesFilePath = getProxiesFilePath();
-        console.log(`Đọc proxies từ file: ${proxiesFilePath}`);
-        
-        try {
-            if (fs.existsSync(proxiesFilePath)) {
-                const proxiesJson = fs.readFileSync(proxiesFilePath, 'utf8');
-                proxies = JSON.parse(proxiesJson);
-                console.log(`Đã đọc ${proxies.length} proxy từ file ${proxiesFilePath}`);
-            } else {
-                console.log(`File proxies.json không tồn tại tại ${proxiesFilePath}, tạo file mới`);
-                fs.writeFileSync(proxiesFilePath, '[]', 'utf8');
-            }
-        } catch (error) {
-            console.error(`Không thể đọc hoặc phân tích cú pháp ${proxiesFilePath}:`, error);
-            console.log(`Đang tạo file ${proxiesFilePath} trống...`);
-            const proxyDir = path.dirname(proxiesFilePath);
-            if (!fs.existsSync(proxyDir)) {
-                fs.mkdirSync(proxyDir, { recursive: true });
-            }
-            fs.writeFileSync(proxiesFilePath, '[]', 'utf8');
-            proxies = [];
-        }
 
-        // Kiểm tra nếu người dùng nhập proxy
+        // Proxy list is owned by proxyService so counters/assignments remain
+        // consistent in memory and on disk. The old login flow re-read/wrote
+        // proxies.json directly and could leave proxyService stale.
         if (customProxy && customProxy.trim() !== "") {
             try {
-                // Sử dụng constructor URL để kiểm tra tính hợp lệ
-                new URL(customProxy);
-                useCustomProxy = true;
-                console.log('Proxy nhập vào hợp lệ:', customProxy);
-
-                // Kiểm tra xem proxy đã tồn tại trong mảng proxies chưa
-                if (!proxies.includes(customProxy)) {
-                    proxies.push(customProxy);
-                    // Lưu mảng proxies đã cập nhật vào proxies.json
-                    fs.writeFileSync(proxiesFilePath, JSON.stringify(proxies, null, 4), 'utf8');
-                    console.log(`Đã thêm proxy mới vào ${proxiesFilePath}: ${customProxy}`);
-                } else {
-                    console.log(`Proxy đã tồn tại trong ${proxiesFilePath}: ${customProxy}`);
+                const parsedProxy = new URL(customProxy);
+                if (!["http:", "https:"].includes(parsedProxy.protocol)) {
+                    throw new Error("Chỉ hỗ trợ proxy http/https");
                 }
-
+                useCustomProxy = true;
+                addProxy(customProxy);
+                console.log('Sử dụng proxy tùy chỉnh:', describeProxy(customProxy));
             } catch (err) {
-                console.log(`Proxy nhập vào không hợp lệ: ${customProxy}. Sẽ sử dụng proxy mặc định.`);
+                throw new Error(`Proxy không hợp lệ: ${err.message}`);
             }
         }
 
         if (useCustomProxy) {
-            console.log('Sử dụng proxy tùy chỉnh:', customProxy);
             agent = new HttpsProxyAgent(customProxy);
         } else if (autoSelectProxy) {
-            // Chỉ tự chọn proxy cho lần login mới hoặc credential legacy chưa lưu proxy.
-            if (proxies.length > 0) {
+            if (getPROXIES().length > 0) {
                 const proxyIndex = getAvailableProxyIndex();
                 if (proxyIndex === -1) {
                     console.log('Tất cả proxy đều đã đủ tài khoản. Sẽ đăng nhập không qua proxy.');
                     agent = null;
                 } else {
-                    proxyUsed = getPROXIES()[proxyIndex];
-                    console.log('Sử dụng proxy tự động:', proxyUsed.url);
+                    proxyUsed = getProxyRef(proxyIndex);
+                    console.log('Sử dụng proxy tự động:', describeProxy(proxyUsed.url));
                     agent = new HttpsProxyAgent(proxyUsed.url);
                 }
             } else {
@@ -2326,97 +2384,43 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
                 agent = null;
             }
         } else {
-            // Reconnect/restore của credential đã biết là không dùng proxy:
-            // tuyệt đối không tự đổi sang proxy khác vì có thể làm Zalo vô hiệu session.
             console.log('Giữ kết nối không proxy theo credential đã lưu');
             agent = null;
         }
         let zalo;
-        // Hàm lấy metadata của hình ảnh
+        // zca-js v2 requires an imageMetadataGetter when sending image files.
+        // Use image-size v2 async file API so large/multi-image sends do not block
+        // the Node.js event loop with synchronous file reads.
         const getImageMetadata = async (filePath) => {
-            console.log(`Đang lấy metadata cho ảnh: ${filePath}`);
             try {
-                // Kiểm tra nếu file tồn tại và có thể đọc được
-                if (!filePath.startsWith('http://') && !filePath.startsWith('https://') && fs.existsSync(filePath)) {
-                    try {
-                        // Đọc kích thước ảnh bằng fs built-in
-                        const stats = fs.statSync(filePath);
-                        
-                        // Thử đọc kích thước ảnh bằng cách import động image-size
-                        try {
-                            // Sử dụng dynamic import để không làm ứng dụng lỗi nếu không có thư viện
-                            const sizeOf = await import('image-size').then(module => module.default || module);
-                            const dimensions = sizeOf(filePath);
-                            
-                            console.log(`Đọc được kích thước thật của ảnh: ${dimensions.width}x${dimensions.height}, size: ${stats.size}`);
-                            
-                            return {
-                                width: dimensions.width,
-                                height: dimensions.height,
-                                size: stats.size
-                            };
-                        } catch (importError) {
-                            // Nếu không import được thư viện, sử dụng phương pháp đọc header file
-                            console.warn(`Không thể import image-size: ${importError.message}. Thử phân tích header file...`);
-                            
-                            // Đọc phần đầu file để phân tích định dạng ảnh
-                            const buffer = Buffer.alloc(24);  // Đọc 24 bytes đầu tiên để xác định loại ảnh
-                            const fd = fs.openSync(filePath, 'r');
-                            fs.readSync(fd, buffer, 0, 24, 0);
-                            fs.closeSync(fd);
-                            
-                            // Kiểm tra các định dạng ảnh phổ biến (JPEG, PNG)
-                            if (buffer[0] === 0xFF && buffer[1] === 0xD8) {
-                                // JPEG: tìm SOF marker để lấy kích thước
-                                const fileData = fs.readFileSync(filePath);
-                                let pos = 2;
-                                while (pos < fileData.length) {
-                                    if (fileData[pos] !== 0xFF) pos++;
-                                    else if (fileData[pos+1] >= 0xC0 && fileData[pos+1] <= 0xCF && fileData[pos+1] !== 0xC4 && fileData[pos+1] !== 0xC8) {
-                                        const height = (fileData[pos+5] << 8) + fileData[pos+6];
-                                        const width = (fileData[pos+7] << 8) + fileData[pos+8];
-                                        console.log(`JPEG: đọc được kích thước ${width}x${height}, size: ${stats.size}`);
-                                        return { width, height, size: stats.size };
-                                    } else {
-                                        pos += 2 + (fileData[pos+2] << 8) + fileData[pos+3];
-                                    }
-                                }
-                            } else if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
-                                // PNG: kích thước ở byte 16-23
-                                const width = (buffer[16] << 24) + (buffer[17] << 16) + (buffer[18] << 8) + buffer[19];
-                                const height = (buffer[20] << 24) + (buffer[21] << 16) + (buffer[22] << 8) + buffer[23];
-                                console.log(`PNG: đọc được kích thước ${width}x${height}, size: ${stats.size}`);
-                                return { width, height, size: stats.size };
-                            }
-                            
-                            // Nếu không xác định được kích thước, sử dụng kích thước mặc định
-                            console.warn('Không thể xác định kích thước ảnh từ header, sử dụng kích thước mặc định');
-                        }
-                    } catch (err) {
-                        console.warn(`Không thể đọc thông tin file ${filePath}: ${err.message}`);
-                    }
+                if (typeof filePath !== 'string' || filePath.startsWith('http://') || filePath.startsWith('https://')) {
+                    return { width: 1280, height: 720, size: 300000 };
                 }
-                
-                // Nếu là URL hoặc không đọc được file
-                // Sử dụng kích thước mặc định cho ảnh hiện đại
+
+                const stats = await fs.promises.stat(filePath);
+                const dimensions = await imageSizeFromFile(filePath);
+                if (!dimensions?.width || !dimensions?.height) {
+                    throw new Error('Không đọc được kích thước ảnh');
+                }
                 return {
-                    width: 1280,
-                    height: 720,
-                    size: fs.existsSync(filePath) ? fs.statSync(filePath).size : 300000
+                    width: dimensions.width,
+                    height: dimensions.height,
+                    size: stats.size,
                 };
             } catch (error) {
-                console.error(`Lỗi khi lấy metadata cho ảnh: ${error.message}`);
-                return {
-                    width: 1280,
-                    height: 720,
-                    size: 300000
-                };
+                console.warn(`[Image] Không thể đọc metadata ${filePath}: ${error.message}. Dùng metadata fallback.`);
+                let size = 300000;
+                try {
+                    if (typeof filePath === 'string') size = (await fs.promises.stat(filePath)).size;
+                } catch {}
+                return { width: 1280, height: 720, size };
             }
         };
         
         if (useCustomProxy || agent) {
             console.log('Khởi tạo Zalo SDK với proxy agent');
             zalo = new Zalo({
+                selfListen: true,
                 agent: agent,
                 // @ts-ignore
                 polyfill: nodefetch,
@@ -2425,6 +2429,7 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
         } else {
             console.log('Khởi tạo Zalo SDK không có proxy');
             zalo = new Zalo({
+                selfListen: true,
                 imageMetadataGetter: getImageMetadata
             });
         }
@@ -2437,7 +2442,7 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
                     api = await zalo.login(loginCredential);
                     console.log('Đăng nhập bằng cookie thành công');
                 } catch (error) {
-                    console.error("Lỗi khi đăng nhập bằng cookie:", error);
+                    console.error("Lỗi khi đăng nhập bằng cookie:", error?.message || error);
 
                     // Auto-reconnect/restore không được tự sinh QR. Giữ cookie để retry.
                     if (!allowQrFallback) {
@@ -2472,21 +2477,11 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
                 });
             }
 
-            api.listener.onConnected(() => {
-                console.log("Zalo SDK đã kết nối");
-                resolve(true);
-            });
-
             console.log('Thiết lập event listeners');
-            setupEventListeners(api, loginResolve);
+            // QR flow đã resolve sớm bằng ảnh QR. Credential/reconnect chỉ resolve
+            // sau khi account info + credential mới đã được lưu hoàn tất.
+            setupEventListeners(api, loginCredential ? null : loginResolve);
             api.listener.start();
-
-            // Nếu sử dụng proxy mặc định từ danh sách thì cập nhật usedCount
-            if (!useCustomProxy && proxyUsed) {
-                proxyUsed.usedCount++;
-                proxyUsed.accounts.push(api);
-                console.log(`Đã cập nhật proxy ${proxyUsed.url} với usedCount = ${proxyUsed.usedCount}`);
-            }
 
             console.log('Đang lấy thông tin tài khoản...');
             const accountInfo = await api.fetchAccountInfo();
@@ -2499,6 +2494,8 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
             const ownId = profile.userId;
             const displayName = profile.displayName;
             console.log(`Thông tin tài khoản: ID=${ownId}, Tên=${displayName}, SĐT=${phoneNumber}`);
+            const effectiveProxy = useCustomProxy ? customProxy : (proxyUsed?.url || null);
+            markProxyAccount(effectiveProxy, ownId);
 
             const existingAccountIndex = zaloAccounts.findIndex(acc => acc.ownId === api.getOwnId());
             if (existingAccountIndex !== -1) {
@@ -2514,7 +2511,6 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
             console.log('Đang lưu cookie...');
             const context = await api.getContext();
             const {imei, cookie, userAgent} = context;
-            const effectiveProxy = useCustomProxy ? customProxy : (proxyUsed?.url || null);
             const data = {
                 imei: imei,
                 cookie: cookie,
@@ -2535,18 +2531,16 @@ export async function loginZaloAccount(customProxy, cred, options = {}) {
             }
             
             const credFilePath = path.join(cookiesDir, `cred_${ownId}.json`);
-            // Luôn ghi đè cookie mới vào file, bất kể file đã tồn tại hay chưa
-            fs.writeFile(credFilePath, JSON.stringify(data, null, 4), (err) => {
-                if (err) {
-                    console.error(`Lỗi khi ghi file cookie vào ${credFilePath}:`, err);
-                } else {
-                    console.log(`Đã lưu cookie mới vào file ${credFilePath}`);
-                }
-            });
+            writeJsonAtomicSync(credFilePath, data, 4);
+            try { fs.chmodSync(credFilePath, 0o600); } catch {}
+            console.log(`Đã lưu credential mới vào ${credFilePath}`);
 
-            console.log(`Đã đăng nhập vào tài khoản ${ownId} (${displayName}) với số điện thoại ${phoneNumber} qua proxy ${useCustomProxy ? customProxy : (proxyUsed?.url || 'không có proxy')}`);
+            console.log(`Đã đăng nhập vào tài khoản ${ownId} (${displayName}) với số điện thoại ${phoneNumber} qua ${describeProxy(effectiveProxy)}`);
+            if (loginCredential) {
+                resolve(true);
+            }
         } catch (error) {
-            console.error('Lỗi trong quá trình đăng nhập Zalo:', error);
+            console.error('Lỗi trong quá trình đăng nhập Zalo:', error?.message || error);
             reject(error);
         }
     });

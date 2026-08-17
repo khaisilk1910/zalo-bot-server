@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+data
+*.log
+.env
+.env.*
+config/.env
+config/webhookConfig.json
+npm-debug.log*
+.DS_Store
+.vscode
+.idea
+*.zip
+*.sha256

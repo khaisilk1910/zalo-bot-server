@@ -2,9 +2,14 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Load config/.env before reading DATA_DIRECTORY so direct Node.js runs and Docker
+// use the same configuration source. Environment variables still take precedence.
+dotenv.config({ path: path.join(__dirname, '.env'), override: false });
 
 // Default data directory path
 let dataDirectory = process.env.DATA_DIRECTORY || '/config/zalo_bot';

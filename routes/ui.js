@@ -1,47 +1,14 @@
 import express from 'express';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { zaloAccounts, loginZaloAccount } from '../api/zalo/zalo.js';
 import { proxyService } from '../services/proxyService.js';
-import dotenv from 'dotenv';
-import { broadcastMessage } from '../server.js';  // Import hàm broadcast tin nhắn
+import { setDefaultWebhookUrls } from '../services/webhookService.js';
 
 const router = express.Router();
 
-// Dành cho ES Module: xác định __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Đường dẫn đến thư mục views
-const viewsPath = path.join(__dirname, '..', 'views');
-
 // Route đăng nhập quản trị
 router.get('/admin-login', (req, res) => {
-  console.log("Admin login page requested");
-  // Nếu đã đăng nhập, chuyển hướng về trang chủ
-  if (req.session && req.session.authenticated) {
-    console.log("User already authenticated, redirecting to home page");
-    return res.redirect('/');
-  }
-
-  // Đường dẫn tuyệt đối đến file admin-login.ejs
-  const templatePath = path.join(process.cwd(), 'src', 'views', 'admin-login.ejs');
-
-  // Kiểm tra nếu file tồn tại
-  if (fs.existsSync(templatePath)) {
-    console.log(`Template file exists at: ${templatePath}`);
-  } else {
-    console.log(`Template file does NOT exist at: ${templatePath}`);
-  }
-
-  try {
-    res.render('admin-login');
-    console.log("Rendered admin-login template");
-  } catch (error) {
-    console.error("Error rendering admin-login template:", error);
-    res.status(500).send("Lỗi khi hiển thị trang đăng nhập");
-  }
+  if (req.session?.authenticated) return res.redirect('/');
+  return res.render('admin-login');
 });
 
 // Thêm thông tin session vào trang chủ
@@ -71,9 +38,8 @@ router.get('/zalo-login', (req, res) => {
 // Xử lý đăng nhập: sử dụng proxy do người dùng nhập nếu hợp lệ, nếu không sẽ sử dụng proxy mặc định
 router.post('/zalo-login', async (req, res) => {
     try {
-        console.log('Nhận yêu cầu tạo mã QR với dữ liệu:', req.body);
         const { proxy } = req.body;
-        console.log('Đang tạo mã QR với proxy:', proxy || 'không có proxy');
+        console.log('Đang tạo mã QR', proxy ? 'với proxy đã cấu hình' : 'không qua proxy');
 
         const qrCodeImage = await loginZaloAccount(proxy, null);
         console.log('Đã tạo mã QR thành công, độ dài:', qrCodeImage ? qrCodeImage.length : 0);
@@ -149,72 +115,22 @@ router.get('/accounts', (req, res) => {
 
 // Endpoint cập nhật 3 webhook URL
 router.post('/updateWebhook', (req, res) => {
-  const { messageWebhookUrl, groupEventWebhookUrl, reactionWebhookUrl } = req.body;
-  // Kiểm tra tính hợp lệ của từng URL
-  if (!messageWebhookUrl || !messageWebhookUrl.startsWith("http")) {
-      return res.status(400).json({ success: false, error: 'messageWebhookUrl không hợp lệ' });
-  }
-  if (!groupEventWebhookUrl || !groupEventWebhookUrl.startsWith("http")) {
-      return res.status(400).json({ success: false, error: 'groupEventWebhookUrl không hợp lệ' });
-  }
-  if (!reactionWebhookUrl || !reactionWebhookUrl.startsWith("http")) {
-      return res.status(400).json({ success: false, error: 'reactionWebhookUrl không hợp lệ' });
-  }
+  const { messageWebhookUrl, groupEventWebhookUrl, reactionWebhookUrl } = req.body || {};
+  const values = { messageWebhookUrl, groupEventWebhookUrl, reactionWebhookUrl };
 
-  // Update process.env variables
-  process.env.MESSAGE_WEBHOOK_URL = messageWebhookUrl;
-  process.env.GROUP_EVENT_WEBHOOK_URL = groupEventWebhookUrl;
-  process.env.REACTION_WEBHOOK_URL = reactionWebhookUrl;
-
-  // Function to update or add a key in the .env content
-  const updateEnvVar = (content, key, value) => {
-    const regex = new RegExp(`^${key}=.*`, 'gm');
-    const newLine = `${key}=${value}`;
-
-    if (regex.test(content)) {
-      return content.replace(regex, newLine);
-    } else {
-      return content + (content && !content.endsWith('\n') ? '\n' : '') + newLine + '\n';
+  for (const [key, value] of Object.entries(values)) {
+    try {
+      const parsed = new URL(String(value || ''));
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('invalid protocol');
+    } catch {
+      return res.status(400).json({ success: false, error: `${key} không hợp lệ` });
     }
-  };
-
-  // Update root .env file
-  const rootEnvPath = path.join(process.cwd(), '.env');
-  let rootEnvContent = '';
-
-  // Read existing .env content if it exists
-  if (fs.existsSync(rootEnvPath)) {
-    rootEnvContent = fs.readFileSync(rootEnvPath, 'utf8');
   }
 
-  // Update all three webhook URLs
-  rootEnvContent = updateEnvVar(rootEnvContent, 'MESSAGE_WEBHOOK_URL', messageWebhookUrl);
-  rootEnvContent = updateEnvVar(rootEnvContent, 'GROUP_EVENT_WEBHOOK_URL', groupEventWebhookUrl);
-  rootEnvContent = updateEnvVar(rootEnvContent, 'REACTION_WEBHOOK_URL', reactionWebhookUrl);
-
-  // Also update Docker volume .env file
-  const dockerEnvPath = path.join(process.cwd(), 'zalo_data', '.env');
-  let dockerEnvContent = '';
-
-  // Read existing Docker .env content if it exists
-  if (fs.existsSync(dockerEnvPath)) {
-    dockerEnvContent = fs.readFileSync(dockerEnvPath, 'utf8');
+  if (!setDefaultWebhookUrls(values)) {
+    return res.status(500).json({ success: false, error: 'Không thể lưu cấu hình webhook' });
   }
-
-  // Update all three webhook URLs in Docker .env
-  dockerEnvContent = updateEnvVar(dockerEnvContent, 'MESSAGE_WEBHOOK_URL', messageWebhookUrl);
-  dockerEnvContent = updateEnvVar(dockerEnvContent, 'GROUP_EVENT_WEBHOOK_URL', groupEventWebhookUrl);
-  dockerEnvContent = updateEnvVar(dockerEnvContent, 'REACTION_WEBHOOK_URL', reactionWebhookUrl);
-
-  // Write to both .env files
-  try {
-    fs.writeFileSync(rootEnvPath, rootEnvContent);
-    fs.writeFileSync(dockerEnvPath, dockerEnvContent);
-    res.json({ success: true, message: 'Webhook URLs đã được cập nhật' });
-  } catch (err) {
-    console.error("Lỗi khi ghi file .env:", err);
-    return res.status(500).json({ success: false, error: err.message });
-  }
+  return res.json({ success: true, message: 'Webhook URLs đã được cập nhật' });
 });
 
 // API quản lý proxy
@@ -233,7 +149,7 @@ router.post('/proxies', (req, res) => {
       const newProxy = proxyService.addProxy(proxyUrl);
       res.json({ success: true, data: newProxy });
   } catch (error) {
-      res.status(500).json({ success: false, error: error.message });
+      res.status(400).json({ success: false, error: error.message });
   }
 });
 
@@ -253,6 +169,7 @@ router.delete('/proxies', (req, res) => {
 
 // Route test session
 router.get('/session-test', (req, res) => {
+    if (process.env.ENABLE_DEBUG_ENDPOINTS !== 'true') return res.status(404).send('Not found');
     res.render('session-test');
 });
 
@@ -283,6 +200,7 @@ router.get('/change-password', (req, res) => {
 
 // Hiển thị trang reset mật khẩu admin
 router.get('/reset-password', (req, res) => {
+    if (process.env.ENABLE_ADMIN_PASSWORD_RESET !== 'true') return res.status(404).send('Not found');
     res.render('reset-password');
 });
 

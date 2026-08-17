@@ -1,254 +1,152 @@
-// webhookConfig.js
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import os from 'os';
 import { getDataFilePath } from '../config/addon.js';
-import { broadcastMessage } from '../server.js';
+import { writeJsonAtomicSync } from '../utils/atomicFile.js';
+import { broadcastMessage } from './websocketHub.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Hàm lấy đường dẫn đến file cấu hình webhook - sử dụng thư mục dữ liệu tùy chỉnh
 function getWebhookConfigPath() {
-    const path = getDataFilePath('webhook-config.json');
-    console.log(`[WebhookService] Lấy đường dẫn file webhook-config.json: ${path}`);
-    return path;
+  return getDataFilePath('webhook-config.json');
 }
 
-// Cấu trúc dữ liệu mặc định
-const defaultConfig = {
-    // Webhook mặc định từ .env
+function buildDefaultConfig() {
+  return {
     default: {
-        messageWebhookUrl: process.env.MESSAGE_WEBHOOK_URL || "",
-        groupEventWebhookUrl: process.env.GROUP_EVENT_WEBHOOK_URL || "",
-        reactionWebhookUrl: process.env.REACTION_WEBHOOK_URL || ""
+      messageWebhookUrl: process.env.MESSAGE_WEBHOOK_URL || '',
+      groupEventWebhookUrl: process.env.GROUP_EVENT_WEBHOOK_URL || '',
+      reactionWebhookUrl: process.env.REACTION_WEBHOOK_URL || '',
     },
-    // Cấu hình theo ownId
-    accounts: {}
-};
+    accounts: {},
+  };
+}
 
-// Biến lưu trữ cấu hình webhook
-let webhookConfig = defaultConfig;
+let webhookConfig = buildDefaultConfig();
 
-// Hàm đọc cấu hình webhook từ file
 export function loadWebhookConfig() {
-    try {
-        const webhookConfigPath = getWebhookConfigPath();
-        console.log(`[WebhookService] Đang tải cấu hình webhook từ ${webhookConfigPath}`);
-        
-        // Kiểm tra thư mục có tồn tại
-        const dir = path.dirname(webhookConfigPath);
-        console.log(`[WebhookService] Thư mục cấu hình webhook: ${dir}`);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-            console.log(`[WebhookService] Đã tạo thư mục ${dir}`);
-        }
-        
-        if (fs.existsSync(webhookConfigPath)) {
-            console.log(`[WebhookService] File cấu hình webhook tồn tại: ${webhookConfigPath}`);
-            
-            // Kiểm tra quyền đọc file
-            try {
-                const stats = fs.statSync(webhookConfigPath);
-                console.log(`[WebhookService] File cấu hình kích thước: ${stats.size} bytes`);
-                console.log(`[WebhookService] File quyền: ${JSON.stringify(stats.mode)}`);
-                
-                if (stats.size === 0) {
-                    console.warn("[WebhookService] File cấu hình rỗng, sử dụng cấu hình mặc định");
-                    saveWebhookConfig();
-                    return;
-                }
-            } catch (statError) {
-                console.error(`Lỗi khi kiểm tra thông tin file: ${statError.message}`);
-            }
-            
-            try {
-                const configData = fs.readFileSync(webhookConfigPath, 'utf8');
-                webhookConfig = JSON.parse(configData);
-                console.log("Đã tải cấu hình webhook thành công");
-                
-                // Đảm bảo cấu trúc dữ liệu đúng
-                if (!webhookConfig.default) {
-                    console.warn("Cấu hình không có phần default, thêm vào");
-                    webhookConfig.default = defaultConfig.default;
-                }
-                
-                if (!webhookConfig.accounts) {
-                    console.warn("Cấu hình không có phần accounts, thêm vào");
-                    webhookConfig.accounts = {};
-                }
-                
-                // Đồng bộ cấu hình với biến môi trường
-                syncWebhookConfig();
-            } catch (readError) {
-                console.error(`Lỗi khi đọc/phân tích file cấu hình: ${readError.message}`);
-                // Nếu không đọc được file hoặc JSON không hợp lệ, sử dụng cấu hình mặc định
-                webhookConfig = defaultConfig;
-                // Lưu lại cấu hình mặc định
-                saveWebhookConfig();
-            }
-        } else {
-            console.log(`File cấu hình webhook không tồn tại, tạo mới: ${webhookConfigPath}`);
-            // Nếu file không tồn tại, tạo mới với cấu hình mặc định
-            webhookConfig = defaultConfig;
-            saveWebhookConfig();
-        }
-    } catch (error) {
-        console.error("Lỗi khi tải cấu hình webhook:", error);
-        // Đảm bảo luôn có cấu hình mặc định
-        webhookConfig = defaultConfig;
-    }
-}
+  const configPath = getWebhookConfigPath();
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
 
-// Hàm lưu cấu hình webhook vào file
-export function saveWebhookConfig() {
-    try {
-        const webhookConfigPath = getWebhookConfigPath();
-        // Kiểm tra thư mục có tồn tại
-        const dir = path.dirname(webhookConfigPath);
-        console.log(`[WebhookService] Đang lưu cấu hình webhook vào thư mục: ${dir}`);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-            console.log(`[WebhookService] Đã tạo thư mục ${dir}`);
-        }
-        
-        // Kiểm tra quyền ghi file
-        try {
-            // Thử ghi một file tạm để kiểm tra quyền ghi
-            const testPath = path.join(dir, '.test_write_permission');
-            fs.writeFileSync(testPath, 'test', { flag: 'w' });
-            fs.unlinkSync(testPath); // Xóa file test
-        } catch (writeError) {
-            console.error(`Không có quyền ghi vào thư mục ${dir}:`, writeError);
-            throw new Error(`Không có quyền ghi vào thư mục ${dir}: ${writeError.message}`);
-        }
-        
-        // Ghi file cấu hình
-        fs.writeFileSync(webhookConfigPath, JSON.stringify(webhookConfig, null, 2), 'utf8');
-        console.log(`[WebhookService] Đã lưu cấu hình webhook vào ${webhookConfigPath}`);
-        return true;
-    } catch (error) {
-        console.error("Lỗi khi lưu cấu hình webhook:", error);
-        // Thử ghi vào thư mục tạm nếu thư mục gốc bị lỗi
-        try {
-            const tempDir = os.tmpdir();
-            const tempPath = path.join(tempDir, 'webhookConfig.json');
-            fs.writeFileSync(tempPath, JSON.stringify(webhookConfig, null, 2), 'utf8');
-            console.log(`Đã lưu cấu hình webhook vào thư mục tạm: ${tempPath}`);
-            return false;
-        } catch (tempError) {
-            console.error("Không thể lưu cấu hình webhook vào thư mục tạm:", tempError);
-            return false;
-        }
-    }
-}
+  if (!fs.existsSync(configPath)) {
+    webhookConfig = buildDefaultConfig();
+    saveWebhookConfig();
+    return;
+  }
 
-// Hàm lấy webhook URL theo ownId và loại
-export function getWebhookUrl(key, ownId) {
-    try {
-        // Nếu có ownId và có cấu hình riêng cho ownId đó
-        if (ownId && webhookConfig.accounts[ownId] && webhookConfig.accounts[ownId][key]) {
-            return webhookConfig.accounts[ownId][key];
-        }
-        
-        // Nếu không có cấu hình riêng, sử dụng cấu hình mặc định
-        return webhookConfig.default[key] || "";
-    } catch (error) {
-        console.error("Lỗi khi lấy webhook URL:", error);
-        return "";
-    }
-}
-
-// Hàm thiết lập webhook URL cho một số điện thoại cụ thể
-export function setWebhookUrl(ownId, key, url) {
-    try {
-        // Đảm bảo đã khởi tạo đối tượng cho ownId
-        if (!webhookConfig.accounts[ownId]) {
-            webhookConfig.accounts[ownId] = {};
-        }
-        
-        // Thiết lập URL cho key tương ứng
-        webhookConfig.accounts[ownId][key] = url;
-        
-        // Lưu cấu hình vào file
-        console.log(`[WebhookService] Đang lưu cấu hình webhook cho ownId=${ownId}, key=${key}`);
-        const result = saveWebhookConfig();
-        console.log(`[WebhookService] Kết quả lưu cấu hình: ${result ? 'Thành công' : 'Thất bại'}`);
-        return result;
-    } catch (error) {
-        console.error("Lỗi khi thiết lập webhook URL:", error);
-        return false;
-    }
-}
-
-// Hàm xóa cấu hình webhook cho một số điện thoại
-export function removeWebhookConfig(ownId) {
-    try {
-        if (webhookConfig.accounts[ownId]) {
-            delete webhookConfig.accounts[ownId];
-            console.log(`[WebhookService] Đã xóa cấu hình webhook cho ownId=${ownId}`);
-            const result = saveWebhookConfig();
-            console.log(`[WebhookService] Kết quả xóa cấu hình: ${result ? 'Thành công' : 'Thất bại'}`);
-        }
-        return true;
-    } catch (error) {
-        console.error("Lỗi khi xóa cấu hình webhook:", error);
-        return false;
-    }
-}
-
-// Hàm lấy toàn bộ cấu hình webhook
-export function getAllWebhookConfigs() {
-    return webhookConfig;
-}
-
-// Hàm đồng bộ cấu hình webhook với biến môi trường
-export function syncWebhookConfig() {
-    // Đảm bảo cấu hình mặc định luôn sử dụng giá trị từ biến môi trường
-    if (process.env.MESSAGE_WEBHOOK_URL) {
-        webhookConfig.default.messageWebhookUrl = process.env.MESSAGE_WEBHOOK_URL;
-    }
-    if (process.env.GROUP_EVENT_WEBHOOK_URL) {
-        webhookConfig.default.groupEventWebhookUrl = process.env.GROUP_EVENT_WEBHOOK_URL;
-    }
-    if (process.env.REACTION_WEBHOOK_URL) {
-        webhookConfig.default.reactionWebhookUrl = process.env.REACTION_WEBHOOK_URL;
-    }
-    
-    // Lưu cấu hình đã đồng bộ
-    return saveWebhookConfig();
-}
-
-// Hàm gửi tin nhắn đến tất cả WebSocket clients
-export function broadcastToWebsocket(data) {
   try {
-    // Log để debug
-    console.log(`[WebhookService] Gửi dữ liệu tới WebSocket clients:`, data);
-    
-    // Chuyển đổi dữ liệu thành chuỗi JSON
-    const message = JSON.stringify(data);
-    
-    // Gửi tới tất cả clients
-    broadcastMessage(message);
-    
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    webhookConfig = {
+      default: { ...buildDefaultConfig().default, ...(parsed?.default || {}) },
+      accounts: parsed?.accounts && typeof parsed.accounts === 'object' ? parsed.accounts : {},
+    };
+    syncWebhookConfig(false);
+  } catch (error) {
+    const backupPath = `${configPath}.corrupt-${Date.now()}`;
+    try { fs.copyFileSync(configPath, backupPath); } catch {}
+    console.error(`[Webhook] Cấu hình lỗi, dùng mặc định. Backup: ${backupPath}. ${error.message}`);
+    webhookConfig = buildDefaultConfig();
+    saveWebhookConfig();
+  }
+}
+
+export function saveWebhookConfig() {
+  try {
+    writeJsonAtomicSync(getWebhookConfigPath(), webhookConfig);
     return true;
   } catch (error) {
-    console.error(`[WebhookService] Lỗi khi gửi dữ liệu tới WebSocket:`, error);
+    console.error('[Webhook] Không thể lưu cấu hình:', error.message || error);
     return false;
   }
 }
 
-// Tải cấu hình khi module được import
-loadWebhookConfig();
+export function getWebhookUrl(key, ownId) {
+  const accountValue = ownId ? webhookConfig.accounts?.[ownId]?.[key] : null;
+  return accountValue || webhookConfig.default?.[key] || '';
+}
+
+export function setWebhookUrl(ownId, key, url) {
+  if (!ownId || !['messageWebhookUrl', 'groupEventWebhookUrl', 'reactionWebhookUrl'].includes(key)) {
+    return false;
+  }
+  webhookConfig.accounts[ownId] ??= {};
+  webhookConfig.accounts[ownId][key] = String(url || '').trim();
+  return saveWebhookConfig();
+}
+
+/** Update all webhook URLs for one account with a single atomic file write. */
+export function setAccountWebhookUrls(ownId, values = {}) {
+  if (!ownId) return false;
+  const allowed = ['messageWebhookUrl', 'groupEventWebhookUrl', 'reactionWebhookUrl'];
+  const next = { ...(webhookConfig.accounts?.[ownId] || {}) };
+  for (const key of allowed) {
+    if (Object.prototype.hasOwnProperty.call(values, key)) {
+      next[key] = String(values[key] || '').trim();
+    }
+  }
+  webhookConfig.accounts ??= {};
+  webhookConfig.accounts[ownId] = next;
+  return saveWebhookConfig();
+}
+
+/** Return account-specific values together with resolved defaults. */
+export function getAccountWebhookConfig(ownId) {
+  if (!ownId) return null;
+  const custom = webhookConfig.accounts?.[ownId] || {};
+  return {
+    ownId: String(ownId),
+    messageWebhookUrl: custom.messageWebhookUrl || webhookConfig.default?.messageWebhookUrl || '',
+    groupEventWebhookUrl: custom.groupEventWebhookUrl || webhookConfig.default?.groupEventWebhookUrl || '',
+    reactionWebhookUrl: custom.reactionWebhookUrl || webhookConfig.default?.reactionWebhookUrl || '',
+    custom: structuredClone(custom),
+  };
+}
+
+export function setDefaultWebhookUrls(values = {}) {
+  const allowed = ['messageWebhookUrl', 'groupEventWebhookUrl', 'reactionWebhookUrl'];
+  webhookConfig.default ??= {};
+  for (const key of allowed) {
+    if (Object.prototype.hasOwnProperty.call(values, key)) {
+      webhookConfig.default[key] = String(values[key] || '').trim();
+    }
+  }
+  return saveWebhookConfig();
+}
+
+export function removeWebhookConfig(ownId) {
+  if (webhookConfig.accounts?.[ownId]) delete webhookConfig.accounts[ownId];
+  return saveWebhookConfig();
+}
+
+export function getAllWebhookConfigs() {
+  return structuredClone(webhookConfig);
+}
+
+export function syncWebhookConfig(persist = true) {
+  const defaults = webhookConfig.default ?? (webhookConfig.default = {});
+  if (process.env.MESSAGE_WEBHOOK_URL) defaults.messageWebhookUrl = process.env.MESSAGE_WEBHOOK_URL;
+  if (process.env.GROUP_EVENT_WEBHOOK_URL) defaults.groupEventWebhookUrl = process.env.GROUP_EVENT_WEBHOOK_URL;
+  if (process.env.REACTION_WEBHOOK_URL) defaults.reactionWebhookUrl = process.env.REACTION_WEBHOOK_URL;
+  return persist ? saveWebhookConfig() : true;
+}
+
+export function broadcastToWebsocket(data) {
+  try {
+    broadcastMessage(JSON.stringify(data));
+    return true;
+  } catch (error) {
+    console.error('[WebSocket] Không thể broadcast:', error.message || error);
+    return false;
+  }
+}
 
 export default {
-    getWebhookUrl,
-    setWebhookUrl,
-    removeWebhookConfig,
-    loadWebhookConfig,
-    saveWebhookConfig,
-    getAllWebhookConfigs,
-    syncWebhookConfig,
-    broadcastToWebsocket
+  getWebhookUrl,
+  setWebhookUrl,
+  setAccountWebhookUrls,
+  getAccountWebhookConfig,
+  setDefaultWebhookUrls,
+  removeWebhookConfig,
+  loadWebhookConfig,
+  saveWebhookConfig,
+  getAllWebhookConfigs,
+  syncWebhookConfig,
+  broadcastToWebsocket,
 };

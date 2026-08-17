@@ -25,3 +25,31 @@
 - Auto-reconnect và startup restore không tự fallback sang QR.
 - Lưu proxy cùng credential và tái sử dụng đúng proxy (hoặc giữ không-proxy) khi reconnect/restart.
 - Credential cũ chưa có trường `proxy` vẫn tương thích; sau lần login thành công sẽ được nâng cấp tự động.
+
+## 1.0.4
+- Add `getReceivedFriendRequestsByAccount` by filtering Zalo friend recommendations to received friend requests (`recommType = 2`).
+- Restore `getGroupChatHistoryByAccount` with a persistent local group-message history cache because Zalo removed the upstream `/api/group/history` endpoint.
+- Store group history under `DATA_DIRECTORY/history/groups`, surviving Docker restarts through the existing `/app/data` volume.
+- Enable `selfListen` only to capture self-sent group messages into history while preserving previous webhook/WebSocket behavior for external consumers.
+- Pin `zca-js` to `2.0.4` to avoid unexpected behavior changes from the previous `latest` dependency specifier.
+
+## v1.0.5
+- Sửa lỗi gửi nhiều ảnh bị lặp ảnh cuối: mỗi ảnh tải về file tạm UUID riêng, giữ thứ tự attachment và dọn file sau khi gửi.
+- Giới hạn concurrency tải ảnh và thêm timeout/kích thước tối đa cho file/ảnh từ URL.
+
+## v1.0.6
+- Loại bỏ Axios; dùng chung `node-fetch` cho webhook và tải ảnh để giảm dependency/security surface.
+- Tách WebSocket hub và reconnect dependency để loại circular imports; thêm heartbeat, giới hạn payload/buffer và graceful shutdown.
+- Sửa race condition trong persistent group-history cache; batch write, dedupe và compact cache có giới hạn.
+- Sửa theo dõi proxy/account assignment sau reconnect và không log credential proxy.
+- Thêm `/api/health` nhẹ; phục hồi account đồng thời có giới hạn khi startup.
+- Bổ sung đầy đủ 4 API quản lý webhook theo account mà UI/HACS sử dụng; ghi config atomic.
+- Session Express dùng persistent file store, `resave=false`, `saveUninitialized=false`; secret được tạo/lưu bền vững nếu không cấu hình qua env.
+- Vô hiệu hóa mặc định các debug/reset-admin endpoint; chỉ bật bằng biến môi trường riêng.
+- Password mới dùng PBKDF2-SHA512 220k iterations; tự nâng hash legacy khi login.
+- I/O webhook/download có timeout và giới hạn kích thước; image metadata chuyển sang async API.
+- Shared transient image/file responses dùng `Cache-Control: no-store` để tránh ảnh cũ bị cache sau các lần gửi liên tiếp.
+- Pin `zca-js=2.0.4` và `ws=8.21.1`; loại Axios cùng các dependency không dùng `sharp`, `qrcode`, `cookie-parser`.
+- Docker image nhẹ hơn: bỏ compiler toolchain, thêm `.dockerignore` và container healthcheck.
+- Chuyển Docker runtime từ Node.js 20 sang Node.js 22 LTS để tiếp tục nhận bản vá bảo mật và hỗ trợ runtime dài hạn.
+- Sửa `npm start` trỏ đúng `server.js`, giảm log startup nhạy cảm; chỉ dump chi tiết khi `DEBUG_STARTUP=true`.
