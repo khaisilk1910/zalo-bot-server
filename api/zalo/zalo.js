@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { saveImage, saveImages, removeImage, saveFileFromUrl, removeFile } from '../../utils/helpers.js';
 import { writeJsonAtomicSync } from '../../utils/atomicFile.js';
-import { applyAutoDeleteIfRequested, getRequestedAutoDeleteTtl, normalizeAutoDeleteTtl, normalizeThreadType, stripLegacyMessageTtl } from '../../utils/autoDelete.js';
+import { getRequestedMessageTtl, messageTtlResult, normalizeAutoDeleteTtl, normalizeMessageTtl, normalizeThreadType, withMessageTtl } from '../../utils/autoDelete.js';
 import { getCachedGroupHistory } from '../../utils/groupHistoryStore.js';
 
 export const zaloAccounts = [];
@@ -194,18 +194,20 @@ export async function getAccountDetails(req, res) {
 
 // Middleware để xử lý account selection
 function getAccountFromSelection(accountSelection) {
-    if (!accountSelection) {
+    if (accountSelection === undefined || accountSelection === null || accountSelection === '') {
         throw new Error('Vui lòng chọn tài khoản');
     }
 
-    // Hỗ trợ cả ownId và phoneNumber
-    let account = zaloAccounts.find(acc => acc.ownId === accountSelection);
+    // Hỗ trợ cả ownId và phoneNumber. Luôn so sánh dưới dạng text vì ownId
+    // có thể lớn hơn Number.MAX_SAFE_INTEGER và không được phép đi qua Number.
+    const selection = String(accountSelection).trim();
+    let account = zaloAccounts.find(acc => String(acc.ownId) === selection);
     if (!account) {
-        account = zaloAccounts.find(acc => acc.phoneNumber === accountSelection);
+        account = zaloAccounts.find(acc => String(acc.phoneNumber) === selection);
     }
 
     if (!account) {
-        throw new Error(`Không tìm thấy tài khoản: ${accountSelection}`);
+        throw new Error(`Không tìm thấy tài khoản: ${selection}`);
     }
 
     return account;
@@ -400,12 +402,11 @@ export async function sendMessageByAccount(req, res) {
 
         const account = getAccountFromSelection(accountSelection);
         const msgType = normalizeThreadType(type, ThreadType);
-        const requestedTtl = getRequestedAutoDeleteTtl(req.body, message);
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, requestedTtl, threadId, msgType);
+        const requestedTtl = getRequestedMessageTtl(req.body, message);
 
-        // Per-message ttl is no longer reliably honored by Zalo. Remove it from
-        // MessageContent and use conversation auto-delete above instead.
-        let messageContent = stripLegacyMessageTtl(message);
+        // zca-js 2.1.2 accepts ttl directly on MessageContent. Keep message TTL
+        // separate from conversation-wide Auto Delete (updateAutoDeleteChat).
+        let messageContent = withMessageTtl(message, requestedTtl);
         if (quote) {
             if (typeof messageContent === 'string') {
                 messageContent = {
@@ -425,7 +426,7 @@ export async function sendMessageByAccount(req, res) {
         res.json({
             success: true,
             data: result,
-            autoDelete,
+            messageTtl: messageTtlResult(requestedTtl),
             usedAccount: {
                 ownId: account.ownId,
                 phoneNumber: account.phoneNumber
@@ -448,7 +449,7 @@ export async function sendImageByAccount(req, res) {
 
         const account = getAccountFromSelection(accountSelection);
         const threadType = normalizeThreadType(type, ThreadType);
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, threadType);
+        const normalizedMessageTtl = normalizeMessageTtl(ttl);
 
         imagePath = await saveImage(imageUrl);
         if (!imagePath) {
@@ -456,10 +457,10 @@ export async function sendImageByAccount(req, res) {
         }
 
         const result = await account.api.sendMessage(
-            {
+            withMessageTtl({
                 msg: message || '',
                 attachments: [imagePath]
-            },
+            }, normalizedMessageTtl),
             String(threadId),
             threadType
         );
@@ -470,7 +471,7 @@ export async function sendImageByAccount(req, res) {
         res.json({
             success: true,
             data: result,
-            autoDelete,
+            messageTtl: messageTtlResult(normalizedMessageTtl),
             usedAccount: {
                 ownId: account.ownId,
                 phoneNumber: account.phoneNumber
@@ -638,7 +639,7 @@ export async function sendImageToUserByAccount(req, res) {
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.User);
+        const normalizedMessageTtl = normalizeMessageTtl(ttl);
         imagePath = await saveImage(imageUrl);
 
         if (!imagePath) {
@@ -646,7 +647,7 @@ export async function sendImageToUserByAccount(req, res) {
         }
 
         const result = await account.api.sendMessage(
-            { msg: '', attachments: [imagePath] },
+            withMessageTtl({ msg: '', attachments: [imagePath] }, normalizedMessageTtl),
             String(threadId),
             ThreadType.User
         );
@@ -657,7 +658,7 @@ export async function sendImageToUserByAccount(req, res) {
         res.json({
             success: true,
             data: result,
-            autoDelete,
+            messageTtl: messageTtlResult(normalizedMessageTtl),
             usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
         });
     } catch (error) {
@@ -677,7 +678,7 @@ export async function sendImagesToUserByAccount(req, res) {
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.User);
+        const normalizedMessageTtl = normalizeMessageTtl(ttl);
 
         const downloadedImages = await saveImages(imageUrls);
         if (downloadedImages.some((imagePath) => !imagePath)) {
@@ -687,7 +688,7 @@ export async function sendImagesToUserByAccount(req, res) {
         imagePaths.push(...downloadedImages);
 
         const result = await account.api.sendMessage(
-            { msg: '', attachments: imagePaths },
+            withMessageTtl({ msg: '', attachments: imagePaths }, normalizedMessageTtl),
             String(threadId),
             ThreadType.User
         );
@@ -698,7 +699,7 @@ export async function sendImagesToUserByAccount(req, res) {
         res.json({
             success: true,
             data: result,
-            autoDelete,
+            messageTtl: messageTtlResult(normalizedMessageTtl),
             usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
         });
     } catch (error) {
@@ -718,7 +719,7 @@ export async function sendImageToGroupByAccount(req, res) {
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.Group);
+        const normalizedMessageTtl = normalizeMessageTtl(ttl);
         imagePath = await saveImage(imageUrl);
 
         if (!imagePath) {
@@ -726,7 +727,7 @@ export async function sendImageToGroupByAccount(req, res) {
         }
 
         const result = await account.api.sendMessage(
-            { msg: '', attachments: [imagePath] },
+            withMessageTtl({ msg: '', attachments: [imagePath] }, normalizedMessageTtl),
             String(threadId),
             ThreadType.Group
         );
@@ -737,7 +738,7 @@ export async function sendImageToGroupByAccount(req, res) {
         res.json({
             success: true,
             data: result,
-            autoDelete,
+            messageTtl: messageTtlResult(normalizedMessageTtl),
             usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
         });
     } catch (error) {
@@ -757,7 +758,7 @@ export async function sendImagesToGroupByAccount(req, res) {
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.Group);
+        const normalizedMessageTtl = normalizeMessageTtl(ttl);
 
         const downloadedImages = await saveImages(imageUrls);
         if (downloadedImages.some((imagePath) => !imagePath)) {
@@ -767,7 +768,7 @@ export async function sendImagesToGroupByAccount(req, res) {
         imagePaths.push(...downloadedImages);
 
         const result = await account.api.sendMessage(
-            { msg: '', attachments: imagePaths },
+            withMessageTtl({ msg: '', attachments: imagePaths }, normalizedMessageTtl),
             String(threadId),
             ThreadType.Group
         );
@@ -778,7 +779,7 @@ export async function sendImagesToGroupByAccount(req, res) {
         res.json({
             success: true,
             data: result,
-            autoDelete,
+            messageTtl: messageTtlResult(normalizedMessageTtl),
             usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
         });
     } catch (error) {
@@ -799,7 +800,7 @@ export async function sendFileByAccount(req, res) {
 
         const account = getAccountFromSelection(accountSelection);
         const threadType = normalizeThreadType(type, ThreadType);
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, threadType);
+        const normalizedMessageTtl = normalizeMessageTtl(ttl);
         filePath = await saveFileFromUrl(fileUrl);
 
         if (!filePath) {
@@ -807,7 +808,7 @@ export async function sendFileByAccount(req, res) {
         }
 
         const result = await account.api.sendMessage(
-            { msg: message || '', attachments: [filePath] },
+            withMessageTtl({ msg: message || '', attachments: [filePath] }, normalizedMessageTtl),
             String(threadId),
             threadType
         );
@@ -818,7 +819,7 @@ export async function sendFileByAccount(req, res) {
         res.json({
             success: true,
             data: result,
-            autoDelete,
+            messageTtl: messageTtlResult(normalizedMessageTtl),
             usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
         });
     } catch (error) {
@@ -1729,10 +1730,15 @@ export async function sendVideoByAccount(req, res) {
         }
         const account = getAccountFromSelection(accountSelection);
         const threadType = normalizeThreadType(type, ThreadType);
-        const result = await account.api.sendVideo(options, String(threadId), threadType);
-        res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+        const normalizedOptions = { ...options };
+        if (Object.prototype.hasOwnProperty.call(normalizedOptions, 'ttl')) {
+            normalizedOptions.ttl = normalizeMessageTtl(normalizedOptions.ttl) ?? 0;
+        }
+        const result = await account.api.sendVideo(normalizedOptions, String(threadId), threadType);
+        res.json({ success: true, data: result, messageTtl: messageTtlResult(normalizedOptions.ttl), usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /ttl|type không hợp lệ/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
@@ -1744,10 +1750,15 @@ export async function sendVoiceByAccount(req, res) {
         }
         const account = getAccountFromSelection(accountSelection);
         const threadType = normalizeThreadType(type, ThreadType);
-        const result = await account.api.sendVoice(options, String(threadId), threadType);
-        res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+        const normalizedOptions = { ...options };
+        if (Object.prototype.hasOwnProperty.call(normalizedOptions, 'ttl')) {
+            normalizedOptions.ttl = normalizeMessageTtl(normalizedOptions.ttl) ?? 0;
+        }
+        const result = await account.api.sendVoice(normalizedOptions, String(threadId), threadType);
+        res.json({ success: true, data: result, messageTtl: messageTtlResult(normalizedOptions.ttl), usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /ttl|type không hợp lệ/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
@@ -1895,28 +1906,26 @@ export async function createPollByAccount(req, res) {
 export async function getPollDetailByAccount(req, res) {
     try {
         const { pollId, accountSelection } = req.body;
-        if (!pollId) {
-            return res.status(400).json({ error: 'pollId là bắt buộc' });
-        }
+        const numericPollId = normalizeFiniteNumber(pollId, 'pollId');
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.getPollDetail(pollId);
-        res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+        const result = await account.api.getPollDetail(numericPollId);
+        return sendAccountResult(res, account, result);
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /pollId|bắt buộc|phải là số/i.test(error.message) ? 400 : 500;
+        return res.status(status).json({ success: false, error: error.message });
     }
 }
 
 export async function lockPollByAccount(req, res) {
     try {
         const { pollId, accountSelection } = req.body;
-        if (!pollId) {
-            return res.status(400).json({ error: 'pollId là bắt buộc' });
-        }
+        const numericPollId = normalizeFiniteNumber(pollId, 'pollId');
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.lockPoll(pollId);
-        res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+        const result = await account.api.lockPoll(numericPollId);
+        return sendAccountResult(res, account, result);
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /pollId|bắt buộc|phải là số/i.test(error.message) ? 400 : 500;
+        return res.status(status).json({ success: false, error: error.message });
     }
 }
 
@@ -2170,28 +2179,34 @@ export async function getQuickMessageListByAccount(req, res) {
 export async function removeQuickMessageByAccount(req, res) {
     try {
         const { itemIds, accountSelection } = req.body;
-        if (!itemIds) {
+        if (itemIds === undefined || itemIds === null || itemIds === '') {
             return res.status(400).json({ error: 'itemIds là bắt buộc' });
         }
+        const normalizedItemIds = Array.isArray(itemIds)
+            ? itemIds.map((id) => normalizeFiniteNumber(id, 'itemIds'))
+            : normalizeFiniteNumber(itemIds, 'itemIds');
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.removeQuickMessage(itemIds);
-        res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+        const result = await account.api.removeQuickMessage(normalizedItemIds);
+        return sendAccountResult(res, account, result);
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /itemIds|bắt buộc|phải là số/i.test(error.message) ? 400 : 500;
+        return res.status(status).json({ success: false, error: error.message });
     }
 }
 
 export async function updateQuickMessageByAccount(req, res) {
     try {
         const { updatePayload, itemId, accountSelection } = req.body;
-        if (!updatePayload || !itemId) {
-            return res.status(400).json({ error: 'updatePayload và itemId là bắt buộc' });
+        if (!updatePayload) {
+            return res.status(400).json({ error: 'updatePayload là bắt buộc' });
         }
+        const numericItemId = normalizeFiniteNumber(itemId, 'itemId');
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.updateQuickMessage(updatePayload, itemId);
-        res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+        const result = await account.api.updateQuickMessage(updatePayload, numericItemId);
+        return sendAccountResult(res, account, result);
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /itemId|updatePayload|bắt buộc|phải là số/i.test(error.message) ? 400 : 500;
+        return res.status(status).json({ success: false, error: error.message });
     }
 }
 
@@ -2701,10 +2716,8 @@ export async function sendMessage(req, res) {
         }
 
         const msgType = normalizeThreadType(type, ThreadType);
-        const requestedTtl = getRequestedAutoDeleteTtl(req.body, message);
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, requestedTtl, threadId, msgType);
-
-        let messageContent = stripLegacyMessageTtl(message);
+        const requestedTtl = getRequestedMessageTtl(req.body, message);
+        let messageContent = withMessageTtl(message, requestedTtl);
         if (quote) {
             if (typeof messageContent === 'string') {
                 messageContent = { msg: messageContent, quote };
@@ -2714,7 +2727,7 @@ export async function sendMessage(req, res) {
         }
 
         const result = await account.api.sendMessage(messageContent, String(threadId), msgType);
-        res.json({ success: true, data: result, autoDelete });
+        res.json({ success: true, data: result, messageTtl: messageTtlResult(requestedTtl) });
     } catch (error) {
         const status = /ttl|type không hợp lệ/i.test(error.message) ? 400 : 500;
         res.status(status).json({ success: false, error: error.message });
@@ -2811,19 +2824,19 @@ export async function sendImageToUser(req, res) {
             return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
         }
 
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.User);
+        const normalizedMessageTtl = normalizeMessageTtl(ttl);
         imagePath = await saveImage(imageUrl);
         if (!imagePath) return res.status(500).json({ success: false, error: 'Failed to save image' });
 
         const result = await account.api.sendMessage(
-            { msg: '', attachments: [imagePath] },
+            withMessageTtl({ msg: '', attachments: [imagePath] }, normalizedMessageTtl),
             String(threadId),
             ThreadType.User
         );
 
         removeImage(imagePath);
         imagePath = null;
-        res.json({ success: true, data: result, autoDelete });
+        res.json({ success: true, data: result, messageTtl: messageTtlResult(normalizedMessageTtl) });
     } catch (error) {
         if (imagePath) removeImage(imagePath);
         const status = /ttl/i.test(error.message) ? 400 : 500;
@@ -2844,7 +2857,7 @@ export async function sendImagesToUser(req, res) {
             return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
         }
 
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.User);
+        const normalizedMessageTtl = normalizeMessageTtl(ttl);
         const downloadedImages = await saveImages(imageUrls);
         if (downloadedImages.some((imagePath) => !imagePath)) {
             for (const savedPath of downloadedImages.filter(Boolean)) removeImage(savedPath);
@@ -2853,14 +2866,14 @@ export async function sendImagesToUser(req, res) {
         imagePaths.push(...downloadedImages);
 
         const result = await account.api.sendMessage(
-            { msg: '', attachments: imagePaths },
+            withMessageTtl({ msg: '', attachments: imagePaths }, normalizedMessageTtl),
             String(threadId),
             ThreadType.User
         );
 
         for (const imagePath of imagePaths) removeImage(imagePath);
         imagePaths.length = 0;
-        res.json({ success: true, data: result, autoDelete });
+        res.json({ success: true, data: result, messageTtl: messageTtlResult(normalizedMessageTtl) });
     } catch (error) {
         for (const imagePath of imagePaths) removeImage(imagePath);
         const status = /ttl/i.test(error.message) ? 400 : 500;
@@ -2881,19 +2894,19 @@ export async function sendImageToGroup(req, res) {
             return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
         }
 
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.Group);
+        const normalizedMessageTtl = normalizeMessageTtl(ttl);
         imagePath = await saveImage(imageUrl);
         if (!imagePath) return res.status(500).json({ success: false, error: 'Failed to save image' });
 
         const result = await account.api.sendMessage(
-            { msg: '', attachments: [imagePath] },
+            withMessageTtl({ msg: '', attachments: [imagePath] }, normalizedMessageTtl),
             String(threadId),
             ThreadType.Group
         );
 
         removeImage(imagePath);
         imagePath = null;
-        res.json({ success: true, data: result, autoDelete });
+        res.json({ success: true, data: result, messageTtl: messageTtlResult(normalizedMessageTtl) });
     } catch (error) {
         if (imagePath) removeImage(imagePath);
         const status = /ttl/i.test(error.message) ? 400 : 500;
@@ -2914,7 +2927,7 @@ export async function sendImagesToGroup(req, res) {
             return res.status(400).json({ error: 'Không tìm thấy tài khoản Zalo với OwnId này' });
         }
 
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, ThreadType.Group);
+        const normalizedMessageTtl = normalizeMessageTtl(ttl);
         const downloadedImages = await saveImages(imageUrls);
         if (downloadedImages.some((imagePath) => !imagePath)) {
             for (const savedPath of downloadedImages.filter(Boolean)) removeImage(savedPath);
@@ -2923,14 +2936,14 @@ export async function sendImagesToGroup(req, res) {
         imagePaths.push(...downloadedImages);
 
         const result = await account.api.sendMessage(
-            { msg: '', attachments: imagePaths },
+            withMessageTtl({ msg: '', attachments: imagePaths }, normalizedMessageTtl),
             String(threadId),
             ThreadType.Group
         );
 
         for (const imagePath of imagePaths) removeImage(imagePath);
         imagePaths.length = 0;
-        res.json({ success: true, data: result, autoDelete });
+        res.json({ success: true, data: result, messageTtl: messageTtlResult(normalizedMessageTtl) });
     } catch (error) {
         for (const imagePath of imagePaths) removeImage(imagePath);
         const status = /ttl/i.test(error.message) ? 400 : 500;
@@ -2952,21 +2965,21 @@ export async function sendFile(req, res) {
         }
 
         const threadType = normalizeThreadType(type, ThreadType);
-        const autoDelete = await applyAutoDeleteIfRequested(account.api, ttl, threadId, threadType);
+        const normalizedMessageTtl = normalizeMessageTtl(ttl);
         filePath = await saveFileFromUrl(fileUrl);
         if (!filePath) {
             return res.status(500).json({ success: false, error: 'Không thể tải và lưu file' });
         }
 
         const result = await account.api.sendMessage(
-            { msg: message || '', attachments: [filePath] },
+            withMessageTtl({ msg: message || '', attachments: [filePath] }, normalizedMessageTtl),
             String(threadId),
             threadType
         );
 
         removeFile(filePath);
         filePath = null;
-        res.json({ success: true, data: result, autoDelete });
+        res.json({ success: true, data: result, messageTtl: messageTtlResult(normalizedMessageTtl) });
     } catch (error) {
         if (filePath) removeFile(filePath);
         const status = /ttl|type không hợp lệ/i.test(error.message) ? 400 : 500;

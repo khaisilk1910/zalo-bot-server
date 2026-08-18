@@ -2,7 +2,7 @@
 
 Zalo Bot Server là server Node.js trung gian cho phép đăng nhập và điều khiển tài khoản Zalo thông qua `zca-js`, cung cấp Web UI, REST API, WebSocket, webhook và backend cho integration **Zalo Bot for Home Assistant**.
 
-> Phiên bản tài liệu này dành cho **Zalo Bot Server v1.2.0** (`zca-js` 2.1.2).
+> Phiên bản tài liệu này dành cho **Zalo Bot Server v1.2.1** (`zca-js` 2.1.2).
 >
 > Nguồn đối chiếu `zca-js`: repository upstream `RFS-ADRENO/zca-js`, release/tag chính thức của dự án và package `zca-js` trên npm. Lưu ý chính upstream xác nhận đây là API Zalo cá nhân **không chính thức của Zalo**, hoạt động bằng cách mô phỏng Zalo Web.
 
@@ -15,7 +15,7 @@ Zalo Bot Server là server Node.js trung gian cho phép đăng nhập và điề
 - Thu hồi/xóa/chuyển tiếp tin nhắn, reaction và typing event.
 - Quản lý bạn bè, lời mời kết bạn, alias, block/unblock và trạng thái online.
 - Quản lý nhóm, thành viên, phó nhóm, chủ nhóm, link nhóm, avatar/tên nhóm, note, poll và reminder.
-- Quản lý Auto Delete của cuộc trò chuyện với các mức Zalo hỗ trợ: `off`, `1d`, `7d`, `14d`.
+- TTL theo từng message (`1h`..`24h`, `1d`, `7d`, `14d`, `off`) và action Auto Delete conversation riêng (`off`, `1d`, `7d`, `14d`).
 - Lấy lịch sử nhóm qua API Zalo khi khả dụng, có compatibility fallback `getrecentv2` và cache listener local bền vững.
 - Quản lý quick message, label, unread, mute, pin, archive và hidden conversation.
 - Webhook đa đích: mỗi ID tài khoản có thể có nhiều webhook độc lập, chọn message/group event/reaction, bật/tắt, thử, sửa và xóa; vẫn tương thích cấu hình webhook cũ.
@@ -168,20 +168,35 @@ Từ v1.0.5+, mỗi ảnh được tải vào một file tạm riêng bằng UUI
 
 Server giữ đúng thứ tự attachment và dọn file tạm sau khi hoàn tất request.
 
-## Auto Delete / TTL
+## TTL tin nhắn / Auto Delete
 
-Zalo hiện không thực thi ổn định TTL riêng trên từng `sendMessage()`. Vì vậy server ánh xạ tùy chọn TTL sang **Auto Delete của cả cuộc trò chuyện**.
+Server v1.2.1 tách đúng hai API của `zca-js 2.1.2`:
 
-Các giá trị được hỗ trợ:
+- **Message TTL**: `ttl` thuộc message/options của `sendMessage`, `sendVideo`, `sendVoice`; server hỗ trợ alias `1h`..`24h`, `1d`, `7d`, `14d`, `off` và số milliseconds không âm.
+- **Conversation Auto Delete**: chỉ thay đổi qua endpoint/action `updateAutoDeleteChat`, với `off`, `1d`, `7d`, `14d`.
 
-```text
-off / 0
-1d  / 86400000
-7d  / 604800000
-14d / 1209600000
+Ví dụ per-message TTL 6 giờ:
+
+```json
+{
+  "message": {"msg": "xin chào"},
+  "threadId": "2036121378794772276",
+  "type": 0,
+  "ttl": "6h",
+  "accountSelection": "+84376861184"
+}
 ```
 
-Nếu request không có `ttl`, server không thay đổi cài đặt Auto Delete hiện tại của cuộc trò chuyện.
+Server không còn tự gọi `updateAutoDeleteChat()` chỉ vì một request gửi tin có `ttl`; do đó TTL 1-24 giờ không làm thay đổi setting tự xóa của cả conversation.
+
+### Zalo ID lớn
+
+Các Zalo ID phải gửi dưới dạng JSON string. Middleware API v1.2.1 chuẩn hóa các ID an toàn về string và **trả HTTP 400** nếu client gửi một numeric ID vượt `Number.MAX_SAFE_INTEGER`, vì lúc đó `JSON.parse` đã không thể đảm bảo chữ số gốc. Dạng `zalo:<id>` cũng được chấp nhận và tự bỏ prefix.
+
+Webhook message giữ `threadId` cũ để tương thích và bổ sung:
+
+- `_threadRef: "zalo:<threadId>"` để dùng trực tiếp trong Home Assistant template mà không biến thành number.
+- `_threadType: 0|1` để automation gửi trả đúng User/Group.
 
 ## Lịch sử nhóm
 

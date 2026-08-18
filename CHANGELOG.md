@@ -12,6 +12,16 @@
 
 # Changelog
 
+## v1.2.1
+
+- Sửa per-message `ttl`: không còn ánh xạ sang `updateAutoDeleteChat`; `sendMessage`, gửi ảnh/file, `sendVideo`, `sendVoice` truyền TTL đúng vào message/options của zca-js 2.1.2.
+- Hỗ trợ alias TTL message `1h`..`24h`, `1d`, `7d`, `14d`, `off` và milliseconds không âm.
+- Giữ Auto Delete conversation thành API riêng với đúng các mốc `off`, `1d`, `7d`, `14d`.
+- Sửa `sendImageToUserByAccount` gọi `sendMessage` sai số lượng/thứ tự tham số.
+- Bảo vệ các Zalo identity ID lớn (`threadId`, user/group/member/message/reminder/topic...): numeric ID không an toàn trả HTTP 400; string được giữ nguyên; hỗ trợ `zalo:<id>`. Poll ID và Quick Message item ID vẫn được giữ kiểu số theo contract SDK, không bị ép thành chuỗi.
+- Webhook message bổ sung `_threadRef` và `_threadType` để Home Assistant giữ chính xác Zalo ID lớn và phản hồi đúng loại hội thoại.
+- Chuẩn hóa `accountSelection` thành chuỗi khi tìm account, so khớp ownId/phoneNumber dưới dạng text để không đưa ownId lớn qua JavaScript Number.
+
 ## v1.2.0
 
 - Thiết kế lại Web UI theo một giao diện thống nhất, responsive, dùng CSS/JS cục bộ, không phụ thuộc CDN cho các trang chính.

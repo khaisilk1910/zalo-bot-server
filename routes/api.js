@@ -186,6 +186,72 @@ import { proxyService } from '../services/proxyService.js';
 
 const router = express.Router();
 
+// Zalo identifiers frequently exceed JavaScript's safe integer range. JSON
+// numbers above Number.MAX_SAFE_INTEGER are already rounded by JSON.parse and
+// cannot be recovered. Reject those values early and require callers to send
+// IDs as strings. Safe numeric IDs are normalized to strings for consistency.
+const ZALO_ID_KEYS = new Set([
+  'threadId', 'threadID', 'groupId', 'userId', 'memberId', 'friendId',
+  'ownId', 'uid', 'uidFrom', 'idTo', 'conversationId',
+  'msgId', 'cliMsgId', 'globalMsgId', 'ownerId', 'actionId',
+  'reminderId', 'topicId', 'photoId'
+]);
+const ZALO_ID_LIST_KEYS = new Set([
+  'threadIds', 'groupIds', 'userIds', 'memberIds', 'friendIds',
+  'msgIds'
+]);
+
+function normalizeZaloIdsInPlace(value, key = '') {
+  if (value === null || value === undefined) return value;
+
+  if (ZALO_ID_KEYS.has(key)) {
+    if (typeof value === 'number') {
+      if (!Number.isSafeInteger(value)) {
+        throw new Error(`${key} vượt giới hạn số nguyên an toàn của JavaScript; hãy gửi ID dưới dạng chuỗi JSON.`);
+      }
+      return String(value);
+    }
+    const text = typeof value === 'string' ? value : String(value);
+    return text.toLowerCase().startsWith('zalo:') ? text.slice(5) : text;
+  }
+
+  if (ZALO_ID_LIST_KEYS.has(key)) {
+    const list = Array.isArray(value) ? value : [value];
+    return list.map((item) => {
+      if (typeof item === 'number' && !Number.isSafeInteger(item)) {
+        throw new Error(`${key} chứa ID vượt giới hạn số nguyên an toàn của JavaScript; hãy gửi ID dưới dạng chuỗi JSON.`);
+      }
+      const text = String(item);
+      return text.toLowerCase().startsWith('zalo:') ? text.slice(5) : text;
+    });
+  }
+
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) {
+      value[i] = normalizeZaloIdsInPlace(value[i]);
+    }
+    return value;
+  }
+
+  if (typeof value === 'object') {
+    for (const [childKey, childValue] of Object.entries(value)) {
+      value[childKey] = normalizeZaloIdsInPlace(childValue, childKey);
+    }
+  }
+  return value;
+}
+
+router.use((req, res, next) => {
+  try {
+    if (req.body && typeof req.body === 'object') {
+      normalizeZaloIdsInPlace(req.body);
+    }
+    next();
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
 // Lightweight unauthenticated health endpoint for Home Assistant/monitoring.
 // Không chạm Zalo API để phản hồi nhanh và không làm tăng nguy cơ rate-limit.
 router.get('/health', (_req, res) => {
@@ -194,7 +260,7 @@ router.get('/health', (_req, res) => {
     success: true,
     status: 'ok',
     uptime: Math.floor(process.uptime()),
-    version: process.env.npm_package_version || '1.2.0',
+    version: process.env.npm_package_version || '1.2.1',
   });
 });
 

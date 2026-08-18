@@ -157,7 +157,16 @@ export function setupEventListeners(api, loginResolve) {
         }
 
         const messageWebhookUrls = getWebhookTargets('message', ownId);
-        const msgWithOwnId = { ...msg, _accountId: ownId };
+        const threadIdText = msg?.threadId == null ? '' : String(msg.threadId);
+        const threadType = Number(msg?.type);
+        const msgWithOwnId = {
+            ...msg,
+            ...(threadIdText ? { threadId: threadIdText, _threadRef: `zalo:${threadIdText}` } : {}),
+            ...(threadType === ThreadType.User || threadType === ThreadType.Group
+                ? { _threadType: threadType }
+                : {}),
+            _accountId: String(ownId)
+        };
 
         for (const webhookUrl of messageWebhookUrls) {
             void triggerN8nWebhook(msgWithOwnId, webhookUrl);
@@ -168,7 +177,7 @@ export function setupEventListeners(api, loginResolve) {
 
     api.listener.on('group_event', (data) => {
         const groupEventWebhookUrls = getWebhookTargets('group_event', ownId);
-        const dataWithOwnId = { ...data, _accountId: ownId };
+        const dataWithOwnId = { ...data, _accountId: String(ownId) };
 
         for (const webhookUrl of groupEventWebhookUrls) {
             void triggerN8nWebhook(dataWithOwnId, webhookUrl);
@@ -183,7 +192,7 @@ export function setupEventListeners(api, loginResolve) {
             console.log('[Event] Nhận reaction cho account', ownId);
         }
         if (reactionWebhookUrls.length) {
-            const reactionWithOwnId = { ...reaction, _accountId: ownId };
+            const reactionWithOwnId = { ...reaction, _accountId: String(ownId) };
             for (const webhookUrl of reactionWebhookUrls) {
                 void triggerN8nWebhook(reactionWithOwnId, webhookUrl);
             }
