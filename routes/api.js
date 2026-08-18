@@ -21,6 +21,11 @@ import {
     getAccountDetails,
     // N8N-friendly wrapper APIs
     findUserByAccount,
+    findUserByUsernameByAccount,
+    getAvatarUrlProfileByAccount,
+    getCloseFriendsByAccount,
+    getFullAvatarByAccount,
+    getMultiUsersByPhonesByAccount,
     getUserInfoByAccount,
     sendFriendRequestByAccount,
     sendMessageByAccount,
@@ -48,6 +53,9 @@ import {
     getReceivedFriendRequestsByAccount,
     getSentFriendRequestByAccount,
     undoFriendRequestByAccount,
+    rejectFriendRequestByAccount,
+    getFriendOnlinesByAccount,
+    getFriendRequestStatusByAccount,
     // Group Management
     addGroupDeputyByAccount,
     removeGroupDeputyByAccount,
@@ -65,6 +73,17 @@ import {
     joinGroupByAccount,
     leaveGroupByAccount,
     updateGroupSettingsByAccount,
+    getGroupLinkDetailByAccount,
+    getGroupInviteBoxListByAccount,
+    getGroupInviteBoxInfoByAccount,
+    joinGroupInviteBoxByAccount,
+    deleteGroupInviteBoxByAccount,
+    getGroupBlockedMemberByAccount,
+    addGroupBlockedMemberByAccount,
+    removeGroupBlockedMemberByAccount,
+    getPendingGroupMembersByAccount,
+    reviewPendingMemberRequestByAccount,
+    getRelatedFriendGroupByAccount,
     // Message Interaction
     addReactionByAccount,
     deleteMessageByAccount,
@@ -88,6 +107,9 @@ import {
     createPollByAccount,
     getPollDetailByAccount,
     lockPollByAccount,
+    addPollOptionsByAccount,
+    sharePollByAccount,
+    votePollByAccount,
     // Reminders
     createReminderByAccount,
     editReminderByAccount,
@@ -127,12 +149,20 @@ import {
     updateProfileByAccount,
     updateLangByAccount,
     updateSettingsByAccount,
+    getSettingsByAccount,
+    updateActiveStatusByAccount,
+    getBizAccountByAccount,
     // Others
     lastOnlineByAccount,
     sendReportByAccount,
     removeFriendByAccount,
     getStickersByAccount,
-    getStickersDetailByAccount
+    getStickersDetailByAccount,
+    searchStickerByAccount,
+    getStickerCategoryDetailByAccount,
+    updateArchivedChatListByAccount,
+    updateProfileBioByAccount,
+    upgradeGroupToCommunityByAccount
 } from '../api/zalo/zalo.js';
 import { validateUser, adminMiddleware, addUser, getAllUsers, changePassword, resetUserPassword, getUserFilePath } from '../services/authService.js';
 import { getDataFilePath } from '../config/addon.js';
@@ -154,7 +184,7 @@ router.get('/health', (_req, res) => {
     success: true,
     status: 'ok',
     uptime: Math.floor(process.uptime()),
-    version: process.env.npm_package_version || '1.0.6',
+    version: process.env.npm_package_version || '1.1.0',
   });
 });
 
@@ -371,6 +401,11 @@ router.get('/accounts/:ownId', getAccountDetails);
 // ===== N8N-FRIENDLY WRAPPER APIs =====
 // API tìm user với account selection (thay vì ownId)
 router.post('/findUserByAccount', findUserByAccount);
+router.post('/findUserByUsernameByAccount', findUserByUsernameByAccount);
+router.post('/getAvatarUrlProfileByAccount', getAvatarUrlProfileByAccount);
+router.post('/getCloseFriendsByAccount', getCloseFriendsByAccount);
+router.post('/getFullAvatarByAccount', getFullAvatarByAccount);
+router.post('/getMultiUsersByPhonesByAccount', getMultiUsersByPhonesByAccount);
 
 // API gửi tin nhắn với account selection
 router.post('/sendMessageByAccount', sendMessageByAccount);
@@ -424,6 +459,9 @@ router.post('/getFriendRecommendationsByAccount', getFriendRecommendationsByAcco
 router.post('/getReceivedFriendRequestsByAccount', getReceivedFriendRequestsByAccount);
 router.post('/getSentFriendRequestByAccount', getSentFriendRequestByAccount);
 router.post('/undoFriendRequestByAccount', undoFriendRequestByAccount);
+router.post('/rejectFriendRequestByAccount', rejectFriendRequestByAccount);
+router.post('/getFriendOnlinesByAccount', getFriendOnlinesByAccount);
+router.post('/getFriendRequestStatusByAccount', getFriendRequestStatusByAccount);
 router.post('/removeFriendByAccount', removeFriendByAccount);
 
 // ===== NEW GROUP MANAGEMENT APIs =====
@@ -443,6 +481,18 @@ router.post('/inviteUserToGroupsByAccount', inviteUserToGroupsByAccount);
 router.post('/joinGroupByAccount', joinGroupByAccount);
 router.post('/leaveGroupByAccount', leaveGroupByAccount);
 router.post('/updateGroupSettingsByAccount', updateGroupSettingsByAccount);
+router.post('/upgradeGroupToCommunityByAccount', upgradeGroupToCommunityByAccount);
+router.post('/getGroupLinkDetailByAccount', getGroupLinkDetailByAccount);
+router.post('/getGroupInviteBoxListByAccount', getGroupInviteBoxListByAccount);
+router.post('/getGroupInviteBoxInfoByAccount', getGroupInviteBoxInfoByAccount);
+router.post('/joinGroupInviteBoxByAccount', joinGroupInviteBoxByAccount);
+router.post('/deleteGroupInviteBoxByAccount', deleteGroupInviteBoxByAccount);
+router.post('/getGroupBlockedMemberByAccount', getGroupBlockedMemberByAccount);
+router.post('/addGroupBlockedMemberByAccount', addGroupBlockedMemberByAccount);
+router.post('/removeGroupBlockedMemberByAccount', removeGroupBlockedMemberByAccount);
+router.post('/getPendingGroupMembersByAccount', getPendingGroupMembersByAccount);
+router.post('/reviewPendingMemberRequestByAccount', reviewPendingMemberRequestByAccount);
+router.post('/getRelatedFriendGroupByAccount', getRelatedFriendGroupByAccount);
 
 // ===== NEW MESSAGE INTERACTION APIs =====
 router.post('/addReactionByAccount', addReactionByAccount);
@@ -454,6 +504,8 @@ router.post('/sendLinkByAccount', sendLinkByAccount);
 router.post('/sendStickerByAccount', sendStickerByAccount);
 router.post('/getStickersByAccount', getStickersByAccount);
 router.post('/getStickersDetailByAccount', getStickersDetailByAccount);
+router.post('/searchStickerByAccount', searchStickerByAccount);
+router.post('/getStickerCategoryDetailByAccount', getStickerCategoryDetailByAccount);
 router.post('/sendVideoByAccount', sendVideoByAccount);
 router.post('/sendVoiceByAccount', sendVoiceByAccount);
 router.post('/undoByAccount', undoByAccount);
@@ -471,6 +523,9 @@ router.post('/getListBoardByAccount', getListBoardByAccount);
 router.post('/createPollByAccount', createPollByAccount);
 router.post('/getPollDetailByAccount', getPollDetailByAccount);
 router.post('/lockPollByAccount', lockPollByAccount);
+router.post('/addPollOptionsByAccount', addPollOptionsByAccount);
+router.post('/sharePollByAccount', sharePollByAccount);
+router.post('/votePollByAccount', votePollByAccount);
 
 // ===== NEW REMINDERS APIs =====
 router.post('/createReminderByAccount', createReminderByAccount);
@@ -495,6 +550,7 @@ router.post('/addUnreadMarkByAccount', addUnreadMarkByAccount);
 router.post('/removeUnreadMarkByAccount', removeUnreadMarkByAccount);
 router.post('/deleteChatByAccount', deleteChatByAccount);
 router.post('/getArchivedChatListByAccount', getArchivedChatListByAccount);
+router.post('/updateArchivedChatListByAccount', updateArchivedChatListByAccount);
 router.post('/getAutoDeleteChatByAccount', getAutoDeleteChatByAccount);
 router.post('/updateAutoDeleteChatByAccount', updateAutoDeleteChatByAccount);
 router.post('/getHiddenConversationsByAccount', getHiddenConversationsByAccount);
@@ -513,8 +569,12 @@ router.post('/deleteAvatarListByAccount', deleteAvatarListByAccount);
 router.post('/getAvatarListByAccount', getAvatarListByAccount);
 router.post('/reuseAvatarByAccount', reuseAvatarByAccount);
 router.post('/updateProfileByAccount', updateProfileByAccount);
+router.post('/updateProfileBioByAccount', updateProfileBioByAccount);
 router.post('/updateLangByAccount', updateLangByAccount);
 router.post('/updateSettingsByAccount', updateSettingsByAccount);
+router.post('/getSettingsByAccount', getSettingsByAccount);
+router.post('/updateActiveStatusByAccount', updateActiveStatusByAccount);
+router.post('/getBizAccountByAccount', getBizAccountByAccount);
 
 // ===== OTHER APIs =====
 router.post('/lastOnlineByAccount', lastOnlineByAccount);

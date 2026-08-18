@@ -20,6 +20,20 @@
   <body>
     <h1>Tài liệu API Zalo Server</h1>
     <p><strong>Base URL hiện tại:</strong> <code><%= baseUrl %></code></p>
+    <p><strong>Server:</strong> v1.1.0 &mdash; <strong>zca-js:</strong> 2.1.2</p>
+
+    <div style="background:#eef6ff;border:1px solid #b8d8ff;padding:14px;border-radius:8px;margin:16px 0;">
+      <strong>Đồng bộ zca-js 2.1.2:</strong> các API mới được expose dưới dạng <code>POST /api/*ByAccount</code>.
+      <table style="margin-top:10px;background:#fff;">
+        <tr><th>Nhóm</th><th>Endpoint mới/được cập nhật</th></tr>
+        <tr><td>User/Friend</td><td><code>findUserByUsernameByAccount</code>, <code>getAvatarUrlProfileByAccount</code>, <code>getFullAvatarByAccount</code>, <code>getCloseFriendsByAccount</code>, <code>getMultiUsersByPhonesByAccount</code>, <code>rejectFriendRequestByAccount</code>, <code>getFriendOnlinesByAccount</code>, <code>getFriendRequestStatusByAccount</code></td></tr>
+        <tr><td>Group</td><td><code>getGroupChatHistoryByAccount</code>, <code>getGroupLinkDetailByAccount</code>, invite-box, blocked/pending member, <code>reviewPendingMemberRequestByAccount</code>, <code>getRelatedFriendGroupByAccount</code>, <code>upgradeGroupToCommunityByAccount</code></td></tr>
+        <tr><td>Poll/Sticker</td><td><code>addPollOptionsByAccount</code>, <code>sharePollByAccount</code>, <code>votePollByAccount</code>, <code>searchStickerByAccount</code>, <code>getStickerCategoryDetailByAccount</code></td></tr>
+        <tr><td>Account/Conversation</td><td><code>getSettingsByAccount</code>, <code>updateActiveStatusByAccount</code>, <code>getBizAccountByAccount</code>, <code>updateProfileBioByAccount</code>, <code>updateArchivedChatListByAccount</code></td></tr>
+      </table>
+      <p style="margin-bottom:0;"><code>type</code> chấp nhận <code>user/0</code> hoặc <code>group/1</code>. Avatar size chấp nhận <code>small/120</code> hoặc <code>large/240</code>.</p>
+    </div>
+
     <h2>Mục lục</h2>
 
     <h3>📋 APIs Quản lý Tài khoản</h3>
@@ -960,7 +974,7 @@ POST /api/sendMessageByAccount
       </div>
 
       <p style="text-align: center; margin-top: 40px; color: #666;">
-        &copy; 2024 Zalo API Documentation - Updated with N8N-Friendly APIs
+        &copy; 2026 Zalo API Documentation - zca-js 2.1.2 / N8N-Friendly APIs
       </p>
     </footer>
   </body>

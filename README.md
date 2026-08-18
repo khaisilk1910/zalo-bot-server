@@ -2,7 +2,9 @@
 
 Zalo Bot Server là server Node.js trung gian cho phép đăng nhập và điều khiển tài khoản Zalo thông qua `zca-js`, cung cấp Web UI, REST API, WebSocket, webhook và backend cho integration **Zalo Bot for Home Assistant**.
 
-> Phiên bản tài liệu này dành cho **Zalo Bot Server v1.0.6**.
+> Phiên bản tài liệu này dành cho **Zalo Bot Server v1.1.0** (`zca-js` 2.1.2).
+>
+> Nguồn đối chiếu `zca-js`: repository upstream `RFS-ADRENO/zca-js`, release/tag chính thức của dự án và package `zca-js` trên npm. Lưu ý chính upstream xác nhận đây là API Zalo cá nhân **không chính thức của Zalo**, hoạt động bằng cách mô phỏng Zalo Web.
 
 ## Tính năng chính
 
@@ -14,7 +16,7 @@ Zalo Bot Server là server Node.js trung gian cho phép đăng nhập và điề
 - Quản lý bạn bè, lời mời kết bạn, alias, block/unblock và trạng thái online.
 - Quản lý nhóm, thành viên, phó nhóm, chủ nhóm, link nhóm, avatar/tên nhóm, note, poll và reminder.
 - Quản lý Auto Delete của cuộc trò chuyện với các mức Zalo hỗ trợ: `off`, `1d`, `7d`, `14d`.
-- Lưu cache lịch sử nhóm bền vững từ các message listener quan sát được.
+- Lấy lịch sử nhóm qua API Zalo khi khả dụng, có compatibility fallback `getrecentv2` và cache listener local bền vững.
 - Quản lý quick message, label, unread, mute, pin, archive và hidden conversation.
 - Webhook riêng cho message, group event và reaction; hỗ trợ cấu hình mặc định hoặc theo từng tài khoản.
 - Quản lý proxy và gán proxy ổn định cho tài khoản.
@@ -36,7 +38,7 @@ Ví dụ:
 ```yaml
 services:
   zalobot:
-    image: ghcr.io/khaisilk1910/zalo-bot-server:v1.0.6
+    image: ghcr.io/khaisilk1910/zalo-bot-server:latest
     container_name: zalo-server
     restart: unless-stopped
     network_mode: host
@@ -183,24 +185,28 @@ Nếu request không có `ttl`, server không thay đổi cài đặt Auto Delet
 
 ## Lịch sử nhóm
 
-API lịch sử nhóm gốc phía Zalo không còn hoạt động ổn định, nên server lưu message nhóm mà listener nhìn thấy vào:
-
-```text
-/app/data/history/groups/<account_id>/<group_id>.jsonl
-```
-
 Endpoint:
 
 ```text
 POST /api/getGroupChatHistoryByAccount
 ```
 
-đọc từ cache này.
+Server dùng ba tầng để giảm lỗi khi Zalo thay đổi endpoint:
+
+1. Gọi `getGroupChatHistory()` của `zca-js` 2.1.2.
+2. Nếu endpoint cũ của Zalo không còn hoạt động, dùng compatibility fallback `group_cloud_message/api/cm/getrecentv2` theo hướng sửa đang được thảo luận upstream, có phân trang và deduplicate `msgId`.
+3. Nếu cả hai request online đều lỗi, trả cache listener local từ:
+
+```text
+/app/data/history/groups/<account_id>/<group_id>.jsonl
+```
+
+Response có trường `source` để biết dữ liệu đến từ `zca-js-2.1.2`, `zca-js-getrecentv2-compat` hay `local-cache`.
 
 Lưu ý:
 
-- Cache chỉ có dữ liệu từ thời điểm server bắt đầu ghi history.
-- Không thể tự tải ngược toàn bộ message cũ trước thời điểm đó.
+- Cache local chỉ có dữ liệu từ thời điểm server bắt đầu ghi history.
+- Compatibility fallback được giữ riêng trong server, không sửa file trong `node_modules`; khi zca-js phát hành fix chính thức thì API chính thức vẫn được ưu tiên.
 - Cache được giữ qua restart/recreate container nếu `/app/data` được persist.
 - Server tự deduplicate và giới hạn/compact history để tránh file tăng không giới hạn.
 
@@ -247,7 +253,9 @@ REST API được mount dưới:
 
 ### Các nhóm API chính
 
-- **Account:** danh sách account, chi tiết account, avatar, profile, settings, last online.
+Các endpoint mới/được đồng bộ với `zca-js` 2.1.2 gồm: tìm user theo username, avatar/full avatar, tìm nhiều số điện thoại, close friends, friend online/request status/reject request, history nhóm, invite-box/pending/blocked member, link detail, poll vote/share/add options, search sticker/category detail, archive conversation, profile bio, account settings/active status và upgrade group to community.
+
+- **Account:** danh sách account, chi tiết account, avatar, profile, bio, settings, active status, last online.
 - **Message/media:** text, image, multiple images, file, voice, video, sticker, card, link, typing, reaction, undo/delete/forward.
 - **Friends/users:** tìm user, thông tin user, lời mời kết bạn, friends, alias, block/unblock.
 - **Groups:** tạo nhóm, thành viên, deputy/owner, link nhóm, avatar/name, leave/join/disperse.
@@ -285,7 +293,7 @@ Repo Home Assistant/HACS tương ứng:
 https://github.com/khaisilk1910/zalo-bot-hacs
 ```
 
-Khuyến nghị sử dụng HACS integration cùng thế hệ release tương thích với server v1.0.6.
+Khuyến nghị sử dụng HACS integration cùng thế hệ release tương thích với server v1.1.x.
 
 Đối với media local, Home Assistant integration ghi file tạm/public ở:
 

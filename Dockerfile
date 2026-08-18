@@ -3,7 +3,6 @@ RUN apk add --no-cache jq
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
-COPY scripts ./scripts
 RUN npm ci --omit=dev
 COPY . .
 RUN chmod +x entrypoint.sh

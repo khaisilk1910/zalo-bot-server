@@ -1,10 +1,9 @@
 {
   "name": "zalo-bot",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "postinstall": "node scripts/patch-zca-cookie.mjs"
+    "start": "node server.js"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
@@ -15,6 +14,6 @@
     "image-size": "2.0.2",
     "node-fetch": "^3.3.2",
     "ws": "8.21.1",
-    "zca-js": "2.0.4"
+    "zca-js": "2.1.2"
   }
 }

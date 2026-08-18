@@ -1,5 +1,5 @@
 // api/zalo/zalo.js
-import { Zalo, ThreadType } from 'zca-js';
+import { AvatarSize, DestType, Gender, GroupMessage, Zalo, ThreadType, UpdateSettingsType } from 'zca-js';
 import { getAvailableProxyIndex, getProxyRef, markProxyAccount, addProxy, getPROXIES } from '../../services/proxyService.js';
 import { setupEventListeners, configureReconnectDependencies } from '../../eventListeners.js';
 import { HttpsProxyAgent } from "https-proxy-agent";
@@ -211,28 +211,181 @@ function getAccountFromSelection(accountSelection) {
     return account;
 }
 
+function normalizeAvatarSize(value, fallback = AvatarSize.Small) {
+    if (value === undefined || value === null || value === '') return fallback;
+
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === 'small') return AvatarSize.Small;
+        if (normalized === 'large') return AvatarSize.Large;
+    }
+
+    const numeric = Number(value);
+    if (numeric === AvatarSize.Small || numeric == 120) return AvatarSize.Small;
+    if (numeric === AvatarSize.Large || numeric == 240) return AvatarSize.Large;
+
+    throw new Error('avatarSize không hợp lệ. Dùng small/120 hoặc large/240');
+}
+
+function normalizeCount(value, fallback, min = 1, max = 20000, fieldName = 'count') {
+    if (value === undefined || value === null || value === '') return fallback;
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+        throw new Error(`${fieldName} phải là số nguyên từ ${min} đến ${max}`);
+    }
+    return parsed;
+}
+
+function sendAccountResult(res, account, data, extra = {}) {
+    return res.json({
+        success: true,
+        data,
+        ...extra,
+        usedAccount: {
+            ownId: account.ownId,
+            phoneNumber: account.phoneNumber
+        }
+    });
+}
+
+function normalizeStringOrArray(value, fieldName) {
+    if (value === undefined || value === null || value === '') {
+        throw new Error(`${fieldName} là bắt buộc`);
+    }
+    if (Array.isArray(value)) {
+        const normalized = value.map((item) => String(item).trim()).filter(Boolean);
+        if (normalized.length === 0) throw new Error(`${fieldName} không được là mảng rỗng`);
+        return normalized;
+    }
+    const normalized = String(value).trim();
+    if (!normalized) throw new Error(`${fieldName} là bắt buộc`);
+    return normalized;
+}
+
+function normalizeFiniteNumber(value, fieldName) {
+    if (value === undefined || value === null || value === '') {
+        throw new Error(`${fieldName} là bắt buộc và phải là số`);
+    }
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) throw new Error(`${fieldName} phải là số hợp lệ`);
+    return numeric;
+}
+
+function isValidIsoDate(value) {
+    const text = String(value);
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if (!match) return false;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+const UPDATE_SETTINGS_ALLOWED_VALUES = new Map([
+    [UpdateSettingsType.ViewBirthday, new Set([0, 1, 2])],
+    [UpdateSettingsType.ShowOnlineStatus, new Set([0, 1])],
+    [UpdateSettingsType.DisplaySeenStatus, new Set([0, 1])],
+    [UpdateSettingsType.ReceiveMessage, new Set([1, 2])],
+    [UpdateSettingsType.AcceptCall, new Set([2, 3, 4])],
+    [UpdateSettingsType.AddFriendViaPhone, new Set([0, 1])],
+    [UpdateSettingsType.AddFriendViaQR, new Set([0, 1])],
+    [UpdateSettingsType.AddFriendViaGroup, new Set([0, 1])],
+    [UpdateSettingsType.AddFriendViaContact, new Set([0, 1])],
+    [UpdateSettingsType.DisplayOnRecommendFriend, new Set([0, 1])],
+    [UpdateSettingsType.ArchivedChat, new Set([0, 1])],
+    [UpdateSettingsType.QuickMessage, new Set([0, 1])]
+]);
+
 // API tìm user với account selection
 export async function findUserByAccount(req, res) {
     try {
-        const { phone, accountSelection } = req.body;
+        const { phone, avatarSize, accountSelection } = req.body;
 
         if (!phone) {
             return res.status(400).json({ error: 'Số điện thoại là bắt buộc' });
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const userData = await account.api.findUser(phone);
+        const size = normalizeAvatarSize(avatarSize, AvatarSize.Large);
+        const userData = await account.api.findUser(String(phone), size);
+        return sendAccountResult(res, account, userData);
+    } catch (error) {
+        const status = /avatarSize/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
 
-        res.json({
-            success: true,
-            data: userData,
-            usedAccount: {
-                ownId: account.ownId,
-                phoneNumber: account.phoneNumber
-            }
-        });
+export async function findUserByUsernameByAccount(req, res) {
+    try {
+        const { username, avatarSize, accountSelection } = req.body;
+        if (!username) {
+            return res.status(400).json({ error: 'username là bắt buộc' });
+        }
+        const account = getAccountFromSelection(accountSelection);
+        const size = normalizeAvatarSize(avatarSize, AvatarSize.Large);
+        const result = await account.api.findUserByUsername(String(username), size);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /avatarSize/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function getAvatarUrlProfileByAccount(req, res) {
+    try {
+        const { friendIds, avatarSize, accountSelection } = req.body;
+        if (!friendIds || (Array.isArray(friendIds) && friendIds.length === 0)) {
+            return res.status(400).json({ error: 'friendIds là bắt buộc' });
+        }
+        const account = getAccountFromSelection(accountSelection);
+        const size = normalizeAvatarSize(avatarSize, AvatarSize.Large);
+        const result = await account.api.getAvatarUrlProfile(normalizeStringOrArray(friendIds, 'friendIds'), size);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /avatarSize|friendIds|bắt buộc|mảng rỗng/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function getCloseFriendsByAccount(req, res) {
+    try {
+        const { accountSelection } = req.body;
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getCloseFriends();
+        return sendAccountResult(res, account, result);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function getFullAvatarByAccount(req, res) {
+    try {
+        const { friendId, accountSelection } = req.body;
+        if (!friendId) {
+            return res.status(400).json({ error: 'friendId là bắt buộc' });
+        }
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getFullAvatar(String(friendId));
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function getMultiUsersByPhonesByAccount(req, res) {
+    try {
+        const { phoneNumbers, avatarSize, accountSelection } = req.body;
+        if (!phoneNumbers || (Array.isArray(phoneNumbers) && phoneNumbers.length === 0)) {
+            return res.status(400).json({ error: 'phoneNumbers là bắt buộc' });
+        }
+        const account = getAccountFromSelection(accountSelection);
+        const size = normalizeAvatarSize(avatarSize, AvatarSize.Large);
+        const result = await account.api.getMultiUsersByPhones(phoneNumbers, size);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /avatarSize/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
@@ -332,25 +485,19 @@ export async function sendImageByAccount(req, res) {
 
 export async function getUserInfoByAccount(req, res) {
     try {
-        const { userId, accountSelection } = req.body;
+        const { userId, avatarSize, accountSelection } = req.body;
 
         if (!userId) {
             return res.status(400).json({ error: 'UserId là bắt buộc' });
         }
 
         const account = getAccountFromSelection(accountSelection);
-        const info = await account.api.getUserInfo(userId);
-
-        res.json({
-            success: true,
-            data: info,
-            usedAccount: {
-                ownId: account.ownId,
-                phoneNumber: account.phoneNumber
-            }
-        });
+        const size = normalizeAvatarSize(avatarSize, AvatarSize.Small);
+        const info = await account.api.getUserInfo(userId, size);
+        return sendAccountResult(res, account, info);
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /avatarSize/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
@@ -791,16 +938,16 @@ export async function removeFriendAliasByAccount(req, res) {
 
 export async function getAllFriendsByAccount(req, res) {
     try {
-        const { count, page, accountSelection } = req.body;
+        const { count, page, avatarSize, accountSelection } = req.body;
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.getAllFriends(count, page);
-        res.json({
-            success: true,
-            data: result,
-            usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
-        });
+        const normalizedCount = normalizeCount(count, 20000, 1, 20000, 'count');
+        const normalizedPage = normalizeCount(page, 1, 1, 1000000, 'page');
+        const size = normalizeAvatarSize(avatarSize, AvatarSize.Small);
+        const result = await account.api.getAllFriends(normalizedCount, normalizedPage, size);
+        return sendAccountResult(res, account, result);
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /avatarSize|count|page/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
@@ -861,6 +1008,122 @@ export async function getReceivedFriendRequestsByAccount(req, res) {
     }
 }
 
+export async function rejectFriendRequestByAccount(req, res) {
+    try {
+        const { friendId, accountSelection } = req.body;
+        if (!friendId) return res.status(400).json({ error: 'friendId là bắt buộc' });
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.rejectFriendRequest(String(friendId));
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function getFriendOnlinesByAccount(req, res) {
+    try {
+        const { accountSelection } = req.body;
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getFriendOnlines();
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function getFriendRequestStatusByAccount(req, res) {
+    try {
+        const { friendId, accountSelection } = req.body;
+        if (!friendId) return res.status(400).json({ error: 'friendId là bắt buộc' });
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getFriendRequestStatus(String(friendId));
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+const GROUP_HISTORY_COMPAT_METHOD = '__zaloBotGetGroupChatHistoryRecentV2';
+const groupHistoryOfficialUnavailable = new WeakSet();
+
+function registerGroupHistoryCompatMethod(api) {
+    if (typeof api?.[GROUP_HISTORY_COMPAT_METHOD] === 'function') return;
+    if (typeof api?.custom !== 'function') {
+        throw new Error('zca-js không hỗ trợ custom API cần thiết cho history compatibility');
+    }
+
+    // Compatibility fallback based on the upstream zca-js PR that replaces the
+    // removed /api/group/history endpoint with group_cloud_message/getrecentv2.
+    // Keep this local and secondary so a future official zca-js release remains
+    // the source of truth without mutating files inside node_modules.
+    api.custom(GROUP_HISTORY_COMPAT_METHOD, async ({ ctx, utils, props }) => {
+        const requestedCount = normalizeCount(props?.count, 50, 1, 200, 'count');
+        let cleanGroupId = String(props?.groupId || '').trim();
+        if (!cleanGroupId) throw new Error('groupId là bắt buộc');
+        if (cleanGroupId.startsWith('g')) cleanGroupId = cleanGroupId.slice(1);
+
+        const serviceBase = ctx?.zpwServiceMap?.group_cloud_message?.[0];
+        if (!serviceBase) {
+            throw new Error('Zalo session không cung cấp group_cloud_message service');
+        }
+
+        const serviceURL = utils.makeURL(`${serviceBase}/api/cm/getrecentv2`);
+        const rawMessages = [];
+        const seenMessageIds = new Set();
+        let cursor = 0;
+        let lastPage = null;
+
+        while (rawMessages.length < requestedCount) {
+            const params = {
+                groupId: cleanGroupId,
+                globalMsgId: cursor,
+                count: Math.min(50, requestedCount - rawMessages.length),
+                msgIds: [],
+                imei: ctx.imei,
+                src: 3
+            };
+            const encryptedParams = utils.encodeAES(JSON.stringify(params));
+            if (!encryptedParams) throw new Error('Không thể mã hóa tham số history');
+
+            const response = await utils.request(
+                utils.makeURL(serviceURL, { params: encryptedParams, nretry: 0 }),
+                { method: 'GET' }
+            );
+
+            lastPage = await utils.resolve(response, (result) => {
+                let data = result?.data;
+                if (typeof data === 'string') data = JSON.parse(data);
+                return data || {};
+            });
+
+            const pageMessages = Array.isArray(lastPage?.groupMsgs) ? lastPage.groupMsgs : [];
+            for (const message of pageMessages) {
+                if (rawMessages.length >= requestedCount) break;
+                const messageId = message?.msgId ?? message?.msgID;
+                const dedupeKey = messageId === undefined || messageId === null ? null : String(messageId);
+                if (dedupeKey && seenMessageIds.has(dedupeKey)) continue;
+                if (dedupeKey) seenMessageIds.add(dedupeKey);
+                rawMessages.push(message);
+            }
+
+            const nextCursor = Number(lastPage?.lastMsgId);
+            if (!lastPage?.hasMore || !Number.isFinite(nextCursor) || nextCursor === 0 || nextCursor === cursor) break;
+            cursor = nextCursor;
+        }
+
+        const groupMsgs = rawMessages.map((message) => new GroupMessage(ctx.uid, message));
+        return {
+            ...(lastPage || {}),
+            groupMsgs
+        };
+    });
+}
+
+async function getGroupChatHistoryCompat(api, groupId, count) {
+    registerGroupHistoryCompatMethod(api);
+    return api[GROUP_HISTORY_COMPAT_METHOD]({ groupId, count });
+}
+
 export async function getGroupChatHistoryByAccount(req, res) {
     try {
         const { groupId, count = 50, accountSelection } = req.body;
@@ -868,27 +1131,40 @@ export async function getGroupChatHistoryByAccount(req, res) {
             return res.status(400).json({ success: false, error: 'groupId là bắt buộc' });
         }
 
-        const parsedCount = Number.parseInt(count, 10);
-        if (!Number.isFinite(parsedCount) || parsedCount < 1 || parsedCount > 200) {
-            return res.status(400).json({
-                success: false,
-                error: 'count phải là số nguyên từ 1 đến 200'
-            });
+        const parsedCount = normalizeCount(count, 50, 1, 200, 'count');
+        const account = getAccountFromSelection(accountSelection);
+
+        let upstreamError = null;
+        if (!groupHistoryOfficialUnavailable.has(account.api)) {
+            try {
+                const result = await account.api.getGroupChatHistory(String(groupId), parsedCount);
+                return sendAccountResult(res, account, result, { source: 'zca-js-2.1.2' });
+            } catch (error) {
+                upstreamError = error;
+                if (/404|not found/i.test(String(error?.message || ''))) {
+                    groupHistoryOfficialUnavailable.add(account.api);
+                }
+                console.warn(`[History] zca-js getGroupChatHistory lỗi cho group ${groupId}: ${error.message}. Thử getrecentv2 compatibility.`);
+            }
         }
 
-        const account = getAccountFromSelection(accountSelection);
-        const result = getCachedGroupHistory(account.ownId, groupId, parsedCount);
-
-        res.json({
-            success: true,
-            data: result,
-            warning: result.cachedCount === 0
-                ? 'Chưa có lịch sử local cho nhóm này. History bắt đầu được lưu từ zalo-server v1.0.4 khi listener nhận được tin nhắn.'
-                : undefined,
-            usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
-        });
+        try {
+            const result = await getGroupChatHistoryCompat(account.api, String(groupId), parsedCount);
+            return sendAccountResult(res, account, result, {
+                source: 'zca-js-getrecentv2-compat',
+                ...(upstreamError ? { warning: `API history trong zca-js 2.1.2 không dùng được (${upstreamError.message}); đã dùng endpoint getrecentv2 tương thích.` } : {})
+            });
+        } catch (compatError) {
+            console.warn(`[History] getrecentv2 compatibility lỗi cho group ${groupId}: ${compatError.message}. Fallback local cache.`);
+            const cached = getCachedGroupHistory(account.ownId, groupId, parsedCount);
+            return sendAccountResult(res, account, cached, {
+                source: 'local-cache',
+                warning: `Không lấy được history trực tiếp từ Zalo (${compatError.message}). Đang trả dữ liệu cache listener local.`
+            });
+        }
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /count/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
@@ -1117,7 +1393,7 @@ export async function joinGroupByAccount(req, res) {
             return res.status(400).json({ error: 'link là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.joinGroup(link);
+        const result = await account.api.joinGroupLink(String(link));
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1150,6 +1426,162 @@ export async function updateGroupSettingsByAccount(req, res) {
         const account = getAccountFromSelection(accountSelection);
         const result = await account.api.updateGroupSettings(options, groupId);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function getGroupLinkDetailByAccount(req, res) {
+    try {
+        const { groupId, accountSelection } = req.body;
+        if (!groupId) return res.status(400).json({ error: 'groupId là bắt buộc' });
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getGroupLinkDetail(String(groupId));
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function getGroupInviteBoxListByAccount(req, res) {
+    try {
+        const { options, accountSelection } = req.body;
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getGroupInviteBoxList(options);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function getGroupInviteBoxInfoByAccount(req, res) {
+    try {
+        const { groupId, mpage, mcount, accountSelection } = req.body;
+        if (!groupId) return res.status(400).json({ error: 'groupId là bắt buộc' });
+        const account = getAccountFromSelection(accountSelection);
+        const payload = { groupId: String(groupId) };
+        if (mpage !== undefined) payload.mpage = normalizeCount(mpage, 1, 1, 1000000, 'mpage');
+        if (mcount !== undefined) payload.mcount = normalizeCount(mcount, 10, 1, 200, 'mcount');
+        const result = await account.api.getGroupInviteBoxInfo(payload);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /mpage|mcount/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function joinGroupInviteBoxByAccount(req, res) {
+    try {
+        const { groupId, accountSelection } = req.body;
+        if (!groupId) return res.status(400).json({ error: 'groupId là bắt buộc' });
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.joinGroupInviteBox(String(groupId));
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function deleteGroupInviteBoxByAccount(req, res) {
+    try {
+        const { groupId, blockFutureInvite = false, accountSelection } = req.body;
+        if (!groupId || (Array.isArray(groupId) && groupId.length === 0)) {
+            return res.status(400).json({ error: 'groupId là bắt buộc' });
+        }
+        if (typeof blockFutureInvite !== 'boolean') {
+            return res.status(400).json({ error: 'blockFutureInvite phải là boolean' });
+        }
+        const account = getAccountFromSelection(accountSelection);
+        const ids = Array.isArray(groupId) ? groupId.map(String) : String(groupId);
+        const result = await account.api.deleteGroupInviteBox(ids, blockFutureInvite);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function getGroupBlockedMemberByAccount(req, res) {
+    try {
+        const { groupId, page = 1, count = 50, accountSelection } = req.body;
+        if (!groupId) return res.status(400).json({ error: 'groupId là bắt buộc' });
+        const payload = {
+            page: normalizeCount(page, 1, 1, 1000000, 'page'),
+            count: normalizeCount(count, 50, 1, 200, 'count')
+        };
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getGroupBlockedMember(payload, String(groupId));
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /page|count/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function addGroupBlockedMemberByAccount(req, res) {
+    try {
+        const { memberId, groupId, accountSelection } = req.body;
+        if (!memberId || !groupId) return res.status(400).json({ error: 'memberId và groupId là bắt buộc' });
+        const account = getAccountFromSelection(accountSelection);
+        const ids = normalizeStringOrArray(memberId, 'memberId');
+        const result = await account.api.addGroupBlockedMember(ids, String(groupId));
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /memberId|bắt buộc|mảng rỗng/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function removeGroupBlockedMemberByAccount(req, res) {
+    try {
+        const { memberId, groupId, accountSelection } = req.body;
+        if (!memberId || !groupId) return res.status(400).json({ error: 'memberId và groupId là bắt buộc' });
+        const account = getAccountFromSelection(accountSelection);
+        const ids = normalizeStringOrArray(memberId, 'memberId');
+        const result = await account.api.removeGroupBlockedMember(ids, String(groupId));
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /memberId|bắt buộc|mảng rỗng/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function getPendingGroupMembersByAccount(req, res) {
+    try {
+        const { groupId, accountSelection } = req.body;
+        if (!groupId) return res.status(400).json({ error: 'groupId là bắt buộc' });
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getPendingGroupMembers(String(groupId));
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function reviewPendingMemberRequestByAccount(req, res) {
+    try {
+        const { members, isApprove, groupId, accountSelection } = req.body;
+        if (!members || !groupId) return res.status(400).json({ error: 'members và groupId là bắt buộc' });
+        if (typeof isApprove !== 'boolean') return res.status(400).json({ error: 'isApprove phải là boolean' });
+        const account = getAccountFromSelection(accountSelection);
+        const normalizedMembers = normalizeStringOrArray(members, 'members');
+        const result = await account.api.reviewPendingMemberRequest({ members: normalizedMembers, isApprove }, String(groupId));
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /members|bắt buộc|mảng rỗng|isApprove/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function getRelatedFriendGroupByAccount(req, res) {
+    try {
+        const { friendId, accountSelection } = req.body;
+        if (!friendId || (Array.isArray(friendId) && friendId.length === 0)) {
+            return res.status(400).json({ error: 'friendId là bắt buộc' });
+        }
+        const account = getAccountFromSelection(accountSelection);
+        const ids = normalizeStringOrArray(friendId, 'friendId');
+        const result = await account.api.getRelatedFriendGroup(ids);
+        return sendAccountResult(res, account, result);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1196,7 +1628,9 @@ export async function forwardMessageByAccount(req, res) {
         }
         const account = getAccountFromSelection(accountSelection);
         // API đã thay đổi: forwardMessage(payload, threadIds, type)
-        const result = await account.api.forwardMessage(params, threadIds, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const ids = Array.isArray(threadIds) ? threadIds.map(String) : [String(threadIds)];
+        const result = await account.api.forwardMessage(params, ids, threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1224,7 +1658,8 @@ export async function sendCardByAccount(req, res) {
             return res.status(400).json({ error: 'options và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.sendCard(options, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.sendCard(options, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1238,7 +1673,8 @@ export async function sendLinkByAccount(req, res) {
             return res.status(400).json({ error: 'options và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.sendLink(options, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.sendLink(options, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1252,7 +1688,8 @@ export async function sendStickerByAccount(req, res) {
             return res.status(400).json({ error: 'sticker và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.sendSticker(sticker, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.sendSticker(sticker, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1291,7 +1728,8 @@ export async function sendVideoByAccount(req, res) {
             return res.status(400).json({ error: 'options và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.sendVideo(options, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.sendVideo(options, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1305,7 +1743,8 @@ export async function sendVoiceByAccount(req, res) {
             return res.status(400).json({ error: 'options và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.sendVoice(options, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.sendVoice(options, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1319,7 +1758,8 @@ export async function undoByAccount(req, res) {
             return res.status(400).json({ error: 'payload và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.undo(payload, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.undo(payload, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1333,7 +1773,8 @@ export async function sendDeliveredEventByAccount(req, res) {
             return res.status(400).json({ error: 'isSeen và messages là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.sendDeliveredEvent(isSeen, messages, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.sendDeliveredEvent(isSeen, messages, threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1347,7 +1788,7 @@ export async function sendSeenEventByAccount(req, res) {
             return res.status(400).json({ error: 'messages là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const threadType = type === 'group' ? ThreadType.Group : ThreadType.User;
+        const threadType = normalizeThreadType(type, ThreadType);
         const result = await account.api.sendSeenEvent(messages, threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
@@ -1357,18 +1798,21 @@ export async function sendSeenEventByAccount(req, res) {
 
 export async function sendTypingEventByAccount(req, res) {
     try {
-        const { threadId, accountSelection } = req.body;
+        const { threadId, type, destType = DestType.User, accountSelection } = req.body;
         if (!threadId) {
             return res.status(400).json({ error: 'threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        
-        // Mặc định luôn là User thread với DestType.User
-        const result = await account.api.sendTypingEvent(threadId, ThreadType.User, 3); // DestType.User = 3
-            
-        res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+        const threadType = normalizeThreadType(type, ThreadType);
+        const normalizedDestType = Number(destType);
+        if (threadType === ThreadType.User && ![DestType.User, DestType.Page].includes(normalizedDestType)) {
+            return res.status(400).json({ error: 'destType cho user thread phải là 3 (User) hoặc 5 (Page)' });
+        }
+        const result = await account.api.sendTypingEvent(String(threadId), threadType, normalizedDestType);
+        return sendAccountResult(res, account, result);
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const status = /type không hợp lệ|destType/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
     }
 }
 
@@ -1476,6 +1920,59 @@ export async function lockPollByAccount(req, res) {
     }
 }
 
+export async function addPollOptionsByAccount(req, res) {
+    try {
+        const { payload, accountSelection } = req.body;
+        if (!payload || payload.pollId === undefined || !Array.isArray(payload.options)) {
+            return res.status(400).json({ error: 'payload.pollId và payload.options là bắt buộc' });
+        }
+        if (payload.options.length === 0 || payload.options.some((option) => !option || typeof option.content !== 'string' || typeof option.voted !== 'boolean')) {
+            return res.status(400).json({ error: 'payload.options phải chứa các phần tử { content: string, voted: boolean }' });
+        }
+        const normalizedPayload = {
+            ...payload,
+            pollId: normalizeFiniteNumber(payload.pollId, 'payload.pollId'),
+            votedOptionIds: Array.isArray(payload.votedOptionIds) ? payload.votedOptionIds.map((id) => normalizeFiniteNumber(id, 'payload.votedOptionIds')) : []
+        };
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.addPollOptions(normalizedPayload);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /payload|pollId|options|votedOptionIds|bắt buộc|phải là số/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function sharePollByAccount(req, res) {
+    try {
+        const { pollId, accountSelection } = req.body;
+        const numericPollId = normalizeFiniteNumber(pollId, 'pollId');
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.sharePoll(numericPollId);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /pollId|bắt buộc|phải là số/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function votePollByAccount(req, res) {
+    try {
+        const { pollId, optionId, accountSelection } = req.body;
+        const numericPollId = normalizeFiniteNumber(pollId, 'pollId');
+        if (optionId === undefined || optionId === null) return res.status(400).json({ error: 'optionId là bắt buộc; dùng [] để bỏ phiếu' });
+        const normalizedOptionId = Array.isArray(optionId)
+            ? optionId.map((id) => normalizeFiniteNumber(id, 'optionId'))
+            : normalizeFiniteNumber(optionId, 'optionId');
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.votePoll(numericPollId, normalizedOptionId);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /pollId|optionId|bắt buộc|phải là số/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
 // ===== NEW REMINDERS APIs =====
 
 export async function createReminderByAccount(req, res) {
@@ -1485,7 +1982,8 @@ export async function createReminderByAccount(req, res) {
             return res.status(400).json({ error: 'options và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.createReminder(options, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.createReminder(options, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1499,7 +1997,8 @@ export async function editReminderByAccount(req, res) {
             return res.status(400).json({ error: 'options và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.editReminder(options, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.editReminder(options, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1513,7 +2012,8 @@ export async function removeReminderByAccount(req, res) {
             return res.status(400).json({ error: 'reminderId và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.removeReminder(reminderId, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.removeReminder(reminderId, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1541,7 +2041,8 @@ export async function getListReminderByAccount(req, res) {
             return res.status(400).json({ error: 'threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.getListReminder(options, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.getListReminder(options, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1557,6 +2058,82 @@ export async function getReminderResponsesByAccount(req, res) {
         const account = getAccountFromSelection(accountSelection);
         const result = await account.api.getReminderResponses(reminderId);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+
+// ===== ZCA-JS 2.1.x APIs =====
+
+export async function searchStickerByAccount(req, res) {
+    try {
+        const { keyword, limit = 50, accountSelection } = req.body;
+        if (!keyword) {
+            return res.status(400).json({ error: 'keyword là bắt buộc' });
+        }
+        const normalizedLimit = normalizeCount(limit, 50, 1, 200, 'limit');
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.searchSticker(String(keyword), normalizedLimit);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /limit/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function getStickerCategoryDetailByAccount(req, res) {
+    try {
+        const { cateId, accountSelection } = req.body;
+        const numericCateId = Number(cateId);
+        if (!Number.isInteger(numericCateId) || numericCateId < 0) {
+            return res.status(400).json({ error: 'cateId phải là số nguyên không âm' });
+        }
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getStickerCategoryDetail(numericCateId);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function updateArchivedChatListByAccount(req, res) {
+    try {
+        const { isArchived, conversations, accountSelection } = req.body;
+        if (typeof isArchived !== 'boolean') {
+            return res.status(400).json({ error: 'isArchived phải là boolean' });
+        }
+        if (!conversations || (Array.isArray(conversations) && conversations.length === 0)) {
+            return res.status(400).json({ error: 'conversations là bắt buộc' });
+        }
+        const normalized = (Array.isArray(conversations) ? conversations : [conversations]).map((item) => {
+            if (!item || item.id === undefined || item.type === undefined) {
+                throw new Error('Mỗi conversation phải có id và type');
+            }
+            return {
+                ...item,
+                id: String(item.id),
+                type: normalizeThreadType(item.type, ThreadType)
+            };
+        });
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.updateArchivedChatList(isArchived, normalized);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        const status = /conversation|type không hợp lệ|isArchived/i.test(error.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: error.message });
+    }
+}
+
+export async function upgradeGroupToCommunityByAccount(req, res) {
+    try {
+        const { groupId, accountSelection } = req.body;
+        if (!groupId) {
+            return res.status(400).json({ error: 'groupId là bắt buộc' });
+        }
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.upgradeGroupToCommunity(String(groupId));
+        return sendAccountResult(res, account, result);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1654,7 +2231,8 @@ export async function addUnreadMarkByAccount(req, res) {
             return res.status(400).json({ error: 'threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.addUnreadMark(threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.addUnreadMark(String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1668,7 +2246,8 @@ export async function removeUnreadMarkByAccount(req, res) {
             return res.status(400).json({ error: 'threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.removeUnreadMark(threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.removeUnreadMark(String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1682,7 +2261,8 @@ export async function deleteChatByAccount(req, res) {
             return res.status(400).json({ error: 'lastMessage và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.deleteChat(lastMessage, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.deleteChat(lastMessage, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1757,7 +2337,8 @@ export async function setHiddenConversationsByAccount(req, res) {
             return res.status(400).json({ error: 'hidden và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.setHiddenConversations(hidden, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.setHiddenConversations(hidden, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1807,7 +2388,8 @@ export async function setMuteByAccount(req, res) {
             return res.status(400).json({ error: 'params và threadID là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.setMute(params, threadID, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.setMute(params, String(threadID), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1832,7 +2414,8 @@ export async function setPinnedConversationsByAccount(req, res) {
             return res.status(400).json({ error: 'pinned và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.setPinnedConversations(pinned, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.setPinnedConversations(pinned, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1907,14 +2490,46 @@ export async function reuseAvatarByAccount(req, res) {
 
 export async function updateProfileByAccount(req, res) {
     try {
-        const { name, dob, gender, accountSelection } = req.body;
-        // Basic validation, can be improved
+        const { name, dob, gender, biz, accountSelection } = req.body;
         if (name === undefined || dob === undefined || gender === undefined) {
             return res.status(400).json({ error: 'name, dob, và gender là bắt buộc' });
         }
+        if (!isValidIsoDate(dob)) {
+            return res.status(400).json({ error: 'dob phải là ngày hợp lệ theo định dạng YYYY-MM-DD' });
+        }
+        const numericGender = Number(gender);
+        if (![Gender.Male, Gender.Female].includes(numericGender)) {
+            return res.status(400).json({ error: 'gender phải là 0 (Male) hoặc 1 (Female)' });
+        }
+
+        const payload = {
+            profile: {
+                name: String(name),
+                dob: String(dob),
+                gender: numericGender
+            }
+        };
+        if (biz && typeof biz === 'object' && !Array.isArray(biz)) {
+            payload.biz = biz;
+        }
+
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.updateProfile(name, dob, gender);
-        res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+        const result = await account.api.updateProfile(payload);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function updateProfileBioByAccount(req, res) {
+    try {
+        const { status, accountSelection } = req.body;
+        if (status === undefined || status === null) {
+            return res.status(400).json({ error: 'status là bắt buộc (có thể là chuỗi rỗng để xóa bio)' });
+        }
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.updateProfileBio(String(status));
+        return sendAccountResult(res, account, result);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1937,8 +2552,17 @@ export async function updateSettingsByAccount(req, res) {
         if (!type || status === undefined) {
             return res.status(400).json({ error: 'type và status là bắt buộc' });
         }
+        const normalizedType = String(type);
+        const allowedValues = UPDATE_SETTINGS_ALLOWED_VALUES.get(normalizedType);
+        if (!allowedValues) {
+            return res.status(400).json({ error: `type không hợp lệ. Giá trị hỗ trợ: ${[...UPDATE_SETTINGS_ALLOWED_VALUES.keys()].join(', ')}` });
+        }
+        const normalizedStatus = Number(status);
+        if (!Number.isInteger(normalizedStatus) || !allowedValues.has(normalizedStatus)) {
+            return res.status(400).json({ error: `status không hợp lệ cho ${normalizedType}. Giá trị hỗ trợ: ${[...allowedValues].join(', ')}` });
+        }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.updateSettings(type, status);
+        const result = await account.api.updateSettings(normalizedType, normalizedStatus);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1946,6 +2570,41 @@ export async function updateSettingsByAccount(req, res) {
 }
 
 // ===== OTHER APIs =====
+
+export async function getSettingsByAccount(req, res) {
+    try {
+        const { accountSelection } = req.body;
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getSettings();
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function updateActiveStatusByAccount(req, res) {
+    try {
+        const { active, accountSelection } = req.body;
+        if (typeof active !== 'boolean') return res.status(400).json({ error: 'active phải là boolean' });
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.updateActiveStatus(active);
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
+
+export async function getBizAccountByAccount(req, res) {
+    try {
+        const { friendId, accountSelection } = req.body;
+        if (!friendId) return res.status(400).json({ error: 'friendId là bắt buộc' });
+        const account = getAccountFromSelection(accountSelection);
+        const result = await account.api.getBizAccount(String(friendId));
+        return sendAccountResult(res, account, result);
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}
 
 export async function lastOnlineByAccount(req, res) {
     try {
@@ -1968,7 +2627,8 @@ export async function sendReportByAccount(req, res) {
             return res.status(400).json({ error: 'options và threadId là bắt buộc' });
         }
         const account = getAccountFromSelection(accountSelection);
-        const result = await account.api.sendReport(options, threadId, type);
+        const threadType = normalizeThreadType(type, ThreadType);
+        const result = await account.api.sendReport(options, String(threadId), threadType);
         res.json({ success: true, data: result, usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -2324,10 +2984,10 @@ function describeProxy(proxy) {
     }
 }
 
-// zca-js <= 2.1.1 needs a real getSetCookie() implementation to keep
-// individual Set-Cookie headers intact. node-fetch exposes them through raw().
-// This is used only when a proxy is configured; native Node fetch is preferred
-// for direct connections.
+// zca-js 2.1.2 correctly consumes Headers.getSetCookie(), while node-fetch 3
+// still exposes individual Set-Cookie headers through raw(). When a proxy is
+// configured we use node-fetch + HttpsProxyAgent, so bridge raw() to the native
+// getSetCookie() shape expected by zca-js. Direct connections keep Node fetch.
 async function proxyFetchWithSetCookie(...args) {
     const response = await nodefetch(...args);
     const headers = response?.headers;

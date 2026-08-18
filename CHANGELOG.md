@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.1.0
+
+- Nâng dependency ổn định từ `zca-js 2.0.4` lên **`zca-js 2.1.2`** và pin chính xác version để tránh thay đổi ngoài ý muốn.
+- Loại bỏ postinstall patch chỉnh trực tiếp `node_modules`; luồng QR direct dùng native fetch Node 22, còn proxy bridge `node-fetch` `headers.raw()` sang `getSetCookie()` đúng contract mà zca-js 2.1.2 dùng.
+- Đồng bộ chữ ký API v2: `updateProfile({ profile, biz })`, `ThreadType` 0/1 và `joinGroupLink()` thay cho method `joinGroup()` không tồn tại.
+- Thêm AvatarSize cho `findUser`, `getUserInfo`, `getAllFriends`; thêm `findUserByUsername`, `getAvatarUrlProfile`, `getFullAvatar`, `getCloseFriends`, `getMultiUsersByPhones`.
+- Thêm friend APIs: `rejectFriendRequest`, `getFriendOnlines`, `getFriendRequestStatus`.
+- Thêm group APIs: invite-box, blocked/pending member, review pending request, group link detail, related friend group và upgrade community.
+- Thêm poll APIs `addPollOptions`, `sharePoll`, `votePoll`; thêm sticker search/category detail; archive conversation; profile bio; settings/active status và biz account.
+- `getGroupChatHistoryByAccount` dùng 3 tầng: API chính thức 2.1.2 -> compatibility `getrecentv2` theo upstream PR #370 -> persistent listener cache. Compatibility code không sửa `node_modules`.
+- Giữ thứ tự gửi nhiều ảnh bằng file tạm UUID riêng; tận dụng thêm bản sửa attachment-order của zca-js 2.1.x.
+- Siết validation `count/page`, Gender, ngày sinh, poll, `UpdateSettingsType`/status và typing `destType` để lỗi input trả về sớm thay vì nổ trong SDK.
+- Khi `getGroupChatHistory()` của 2.1.2 trả 404, ghi nhớ trên API session hiện tại để các lần history sau bỏ qua request endpoint cũ và đi thẳng compatibility fallback; session mới sẽ thử lại API chính thức.
+- Rà soát toàn bộ `account.api.*`: mọi method server đang gọi đều tồn tại trong API class của tag zca-js v2.1.2.
+
 ## v1.0.3
 
 - Sửa cơ chế gửi tin nhắn có `ttl`: không còn phụ thuộc vào per-message TTL đã bị Zalo vô hiệu hóa.
