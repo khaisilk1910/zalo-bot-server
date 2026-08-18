@@ -29,7 +29,13 @@ const wss = new WebSocketServer({
   maxBufferedChunks: 4096,
 });
 
+function onUpgradeSocketError(error) {
+  console.warn('[WebSocket] Socket error trong lúc upgrade:', error.message || error);
+}
+
 server.on('upgrade', (request, socket, head) => {
+  socket.on('error', onUpgradeSocketError);
+
   let pathname;
   try {
     pathname = new URL(request.url, 'http://localhost').pathname;
@@ -38,18 +44,21 @@ server.on('upgrade', (request, socket, head) => {
     return;
   }
   if (pathname !== '/ws') {
+    socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
     socket.destroy();
     return;
   }
 
   // Parse the exact same express-session cookie used by the HTTP UI/API.
-  // ws officially recommends authenticating in the upgrade event.
+  // ws recommends authenticating in the HTTP upgrade event.
   sessionMiddleware(request, {}, () => {
     if (!request.session?.authenticated) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
+
+    socket.removeListener('error', onUpgradeSocketError);
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request);
     });

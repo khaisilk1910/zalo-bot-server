@@ -1,3 +1,15 @@
+## 2026-08-18 - Fix trang theo dõi tin nhắn WebSocket
+
+- Sửa `messages.ejs` kết nối sai WebSocket root; frontend và server nay dùng đúng endpoint `/ws`.
+- URL WebSocket giữ được prefix khi chạy sau reverse proxy/Home Assistant ingress.
+- Reconnect dùng exponential backoff và chỉ hiển thị một trạng thái kết nối, không spam hàng loạt cảnh báo mất kết nối.
+- Kiểm tra session khi WebSocket rớt để nhận biết phiên đăng nhập hết hạn.
+- Render dữ liệu tin nhắn bằng DOM/textContent thay vì chèn trực tiếp HTML từ nội dung Zalo, giảm nguy cơ XSS.
+- Giới hạn 250 tin trên trang để tránh DOM/bộ nhớ tăng vô hạn khi mở dashboard lâu.
+- Trang theo dõi bỏ qua tín hiệu `login_success` dành riêng cho trang QR thay vì cố parse JSON.
+- Đồng bộ URL WebSocket của trang QR để tương thích reverse proxy/ingress.
+- Bổ sung xử lý lỗi socket trong HTTP upgrade theo mẫu khuyến nghị của `ws`.
+
 # Changelog
 
 ## v1.1.0

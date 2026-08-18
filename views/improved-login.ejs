@@ -204,9 +204,17 @@
                 socket.close();
             }
             
-            // Xác định URL WebSocket dựa trên URL hiện tại
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            // Xác định URL WebSocket dựa trên URL hiện tại. Giữ prefix nếu
+            // trang đang chạy sau reverse proxy/Home Assistant ingress.
+            const wsLocation = new URL(window.location.href);
+            wsLocation.protocol = wsLocation.protocol === 'https:' ? 'wss:' : 'ws:';
+            const normalizedPath = wsLocation.pathname.replace(/\/+$/, '');
+            const lastSlash = normalizedPath.lastIndexOf('/');
+            const basePath = lastSlash >= 0 ? normalizedPath.slice(0, lastSlash) : '';
+            wsLocation.pathname = `${basePath}/ws`.replace(/\/{2,}/g, '/');
+            wsLocation.search = '';
+            wsLocation.hash = '';
+            const wsUrl = wsLocation.toString();
             
             console.log('Đang kết nối đến WebSocket tại:', wsUrl);
             
