@@ -162,6 +162,16 @@ export const sessionMiddleware = session({
 });
 app.use(sessionMiddleware);
 
+// Shared view locals for the modern UI. Keeping this middleware lightweight
+// avoids repeating session/navigation plumbing in every route.
+app.use((req, res, next) => {
+  res.locals.authenticated = req.session?.authenticated === true;
+  res.locals.username = req.session?.username || '';
+  res.locals.isAdmin = req.session?.role === 'admin';
+  res.locals.currentPath = req.path || '/';
+  next();
+});
+
 // Request log chỉ bật khi cần debug để tránh I/O log trên mọi API call.
 if (process.env.DEBUG_HTTP === 'true') {
   app.use((req, _res, next) => {

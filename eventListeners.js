@@ -1,4 +1,4 @@
-import { getWebhookUrl, triggerN8nWebhook, getCookiesDir } from './utils/helpers.js';
+import { getWebhookTargets, triggerN8nWebhook, getCookiesDir } from './utils/helpers.js';
 import { broadcastToWebsocket } from './services/webhookService.js';
 import fs from 'fs';
 import path from 'path';
@@ -156,35 +156,37 @@ export function setupEventListeners(api, loginResolve) {
             return;
         }
 
-        const messageWebhookUrl = getWebhookUrl('messageWebhookUrl', ownId);
+        const messageWebhookUrls = getWebhookTargets('message', ownId);
         const msgWithOwnId = { ...msg, _accountId: ownId };
 
-        if (messageWebhookUrl) {
-            triggerN8nWebhook(msgWithOwnId, messageWebhookUrl);
+        for (const webhookUrl of messageWebhookUrls) {
+            void triggerN8nWebhook(msgWithOwnId, webhookUrl);
         }
 
         broadcastToWebsocket(msgWithOwnId);
     });
 
     api.listener.on('group_event', (data) => {
-        const groupEventWebhookUrl = getWebhookUrl('groupEventWebhookUrl', ownId);
+        const groupEventWebhookUrls = getWebhookTargets('group_event', ownId);
         const dataWithOwnId = { ...data, _accountId: ownId };
 
-        if (groupEventWebhookUrl) {
-            triggerN8nWebhook(dataWithOwnId, groupEventWebhookUrl);
+        for (const webhookUrl of groupEventWebhookUrls) {
+            void triggerN8nWebhook(dataWithOwnId, webhookUrl);
         }
 
         broadcastToWebsocket(dataWithOwnId);
     });
 
     api.listener.on('reaction', (reaction) => {
-        const reactionWebhookUrl = getWebhookUrl('reactionWebhookUrl', ownId);
+        const reactionWebhookUrls = getWebhookTargets('reaction', ownId);
         if (process.env.DEBUG_EVENTS === 'true') {
             console.log('[Event] Nhận reaction cho account', ownId);
         }
-        if (reactionWebhookUrl) {
+        if (reactionWebhookUrls.length) {
             const reactionWithOwnId = { ...reaction, _accountId: ownId };
-            triggerN8nWebhook(reactionWithOwnId, reactionWebhookUrl);
+            for (const webhookUrl of reactionWebhookUrls) {
+                void triggerN8nWebhook(reactionWithOwnId, webhookUrl);
+            }
         }
     });
 

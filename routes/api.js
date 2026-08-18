@@ -167,12 +167,22 @@ import {
 import { validateUser, adminMiddleware, addUser, getAllUsers, changePassword, resetUserPassword, getUserFilePath } from '../services/authService.js';
 import { getDataFilePath } from '../config/addon.js';
 import {
-    getWebhookUrl,
     setAccountWebhookUrls,
     getAccountWebhookConfig,
     removeWebhookConfig,
-    getAllWebhookConfigs
+    getAllWebhookConfigs,
+    listWebhookAccounts,
+    createWebhookAccount,
+    updateWebhookAccount,
+    getWebhookAccount,
+    createAccountWebhook,
+    updateAccountWebhook,
+    removeAccountWebhook,
+    getAccountWebhook,
+    getWebhookEventTypes,
 } from '../services/webhookService.js';
+import { triggerN8nWebhook } from '../utils/helpers.js';
+import { proxyService } from '../services/proxyService.js';
 
 const router = express.Router();
 
@@ -184,7 +194,7 @@ router.get('/health', (_req, res) => {
     success: true,
     status: 'ok',
     uptime: Math.floor(process.uptime()),
-    version: process.env.npm_package_version || '1.1.0',
+    version: process.env.npm_package_version || '1.2.0',
   });
 });
 
@@ -362,6 +372,27 @@ function isValidOptionalWebhookUrl(value) {
   }
 }
 
+function isValidWebhookUrl(value) {
+  if (!value || String(value).trim().length > 4096) return false;
+  try {
+    const parsed = new URL(String(value).trim());
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function isValidWebhookAccountId(value) {
+  const text = String(value || '').trim();
+  return text.length > 0 && text.length <= 128 && !/[\x00-\x1f\x7f]/.test(text);
+}
+
+function normalizeWebhookEvents(value) {
+  const allowed = new Set(getWebhookEventTypes());
+  const list = Array.isArray(value) ? value : [];
+  return [...new Set(list.map(String).filter((event) => allowed.has(event)))];
+}
+
 // Webhook configuration APIs used by the web UI and Home Assistant integration.
 router.get('/account-webhooks', (_req, res) => {
   res.json({ success: true, data: getAllWebhookConfigs() });
@@ -393,6 +424,153 @@ router.delete('/account-webhook/:ownId', (req, res) => {
     return res.status(500).json({ success: false, error: 'Không thể xóa cấu hình webhook' });
   }
   return res.json({ success: true });
+});
+
+
+// ===== WEBHOOK V2: many destinations per account ID =====
+router.get('/webhook-accounts', (_req, res) => {
+  return res.json({ success: true, data: listWebhookAccounts(), eventTypes: getWebhookEventTypes() });
+});
+
+router.post('/webhook-accounts', (req, res) => {
+  const { ownId, label = '' } = req.body || {};
+  if (!isValidWebhookAccountId(ownId)) {
+    return res.status(400).json({ success: false, error: 'ID tài khoản không hợp lệ' });
+  }
+  const created = createWebhookAccount(String(ownId).trim(), label);
+  if (!created) {
+    return res.status(409).json({ success: false, error: 'ID tài khoản đã tồn tại hoặc không thể lưu cấu hình' });
+  }
+  return res.status(201).json({ success: true, data: created });
+});
+
+router.get('/webhook-accounts/:ownId', (req, res) => {
+  const account = getWebhookAccount(req.params.ownId);
+  if (!account) return res.status(404).json({ success: false, error: 'Không tìm thấy ID tài khoản' });
+  return res.json({ success: true, data: account });
+});
+
+router.put('/webhook-accounts/:ownId', (req, res) => {
+  const nextOwnId = req.body?.ownId ?? req.params.ownId;
+  if (!isValidWebhookAccountId(nextOwnId)) {
+    return res.status(400).json({ success: false, error: 'ID tài khoản mới không hợp lệ' });
+  }
+  const updated = updateWebhookAccount(req.params.ownId, {
+    ownId: String(nextOwnId).trim(),
+    label: req.body?.label ?? '',
+  });
+  if (!updated) {
+    return res.status(409).json({ success: false, error: 'Không tìm thấy ID tài khoản hoặc ID mới đã tồn tại' });
+  }
+  return res.json({ success: true, data: updated });
+});
+
+router.delete('/webhook-accounts/:ownId', (req, res) => {
+  const existing = getWebhookAccount(req.params.ownId);
+  if (!existing) return res.status(404).json({ success: false, error: 'Không tìm thấy ID tài khoản' });
+  if (!removeWebhookConfig(req.params.ownId)) {
+    return res.status(500).json({ success: false, error: 'Không thể xóa cấu hình ID tài khoản' });
+  }
+  return res.json({ success: true });
+});
+
+router.post('/webhook-accounts/:ownId/webhooks', (req, res) => {
+  const account = getWebhookAccount(req.params.ownId);
+  if (!account) return res.status(404).json({ success: false, error: 'Không tìm thấy ID tài khoản' });
+  const events = normalizeWebhookEvents(req.body?.events);
+  if (!isValidWebhookUrl(req.body?.url)) {
+    return res.status(400).json({ success: false, error: 'Webhook URL phải dùng http/https' });
+  }
+  if (!events.length) {
+    return res.status(400).json({ success: false, error: 'Phải chọn ít nhất một loại sự kiện' });
+  }
+  const created = createAccountWebhook(req.params.ownId, {
+    name: req.body?.name || 'Webhook',
+    url: String(req.body.url).trim(),
+    events,
+    enabled: req.body?.enabled !== false,
+  });
+  if (!created) {
+    return res.status(400).json({ success: false, error: 'Không thể thêm webhook; tối đa 50 webhook cho mỗi ID tài khoản' });
+  }
+  return res.status(201).json({ success: true, data: created });
+});
+
+router.put('/webhook-accounts/:ownId/webhooks/:webhookId', (req, res) => {
+  const existing = getAccountWebhook(req.params.ownId, req.params.webhookId);
+  if (!existing) return res.status(404).json({ success: false, error: 'Không tìm thấy webhook' });
+  const events = Object.prototype.hasOwnProperty.call(req.body || {}, 'events')
+    ? normalizeWebhookEvents(req.body.events)
+    : existing.events;
+  const url = Object.prototype.hasOwnProperty.call(req.body || {}, 'url')
+    ? req.body.url
+    : existing.url;
+  if (!isValidWebhookUrl(url)) {
+    return res.status(400).json({ success: false, error: 'Webhook URL phải dùng http/https' });
+  }
+  if (!events.length) {
+    return res.status(400).json({ success: false, error: 'Phải chọn ít nhất một loại sự kiện' });
+  }
+  const updated = updateAccountWebhook(req.params.ownId, req.params.webhookId, {
+    name: Object.prototype.hasOwnProperty.call(req.body || {}, 'name') ? req.body.name : existing.name,
+    url: String(url).trim(),
+    events,
+    enabled: Object.prototype.hasOwnProperty.call(req.body || {}, 'enabled') ? req.body.enabled !== false : existing.enabled,
+  });
+  if (!updated) return res.status(500).json({ success: false, error: 'Không thể cập nhật webhook' });
+  return res.json({ success: true, data: updated });
+});
+
+router.delete('/webhook-accounts/:ownId/webhooks/:webhookId', (req, res) => {
+  if (!getAccountWebhook(req.params.ownId, req.params.webhookId)) {
+    return res.status(404).json({ success: false, error: 'Không tìm thấy webhook' });
+  }
+  if (!removeAccountWebhook(req.params.ownId, req.params.webhookId)) {
+    return res.status(500).json({ success: false, error: 'Không thể xóa webhook' });
+  }
+  return res.json({ success: true });
+});
+
+router.post('/webhook-accounts/:ownId/webhooks/:webhookId/test', async (req, res) => {
+  const webhook = getAccountWebhook(req.params.ownId, req.params.webhookId);
+  if (!webhook) return res.status(404).json({ success: false, error: 'Không tìm thấy webhook' });
+  if (!webhook.enabled) return res.status(400).json({ success: false, error: 'Webhook đang tắt' });
+  const delivered = await triggerN8nWebhook({
+    event: 'zalo_server_webhook_test',
+    _accountId: req.params.ownId,
+    webhookId: webhook.id,
+    webhookName: webhook.name,
+    timestamp: new Date().toISOString(),
+  }, webhook.url);
+  if (!delivered) return res.status(502).json({ success: false, error: 'Webhook không phản hồi thành công' });
+  return res.json({ success: true });
+});
+
+// Proxy APIs used by the modern UI. Keep the old /proxies UI route separate.
+router.get('/proxies', (_req, res) => {
+  return res.json({ success: true, data: proxyService.getPROXIES() });
+});
+
+router.post('/proxies', (req, res) => {
+  const proxyUrl = String(req.body?.proxyUrl || '').trim();
+  if (!proxyUrl) return res.status(400).json({ success: false, error: 'proxyUrl không hợp lệ' });
+  try {
+    const proxy = proxyService.addProxy(proxyUrl);
+    return res.status(201).json({ success: true, data: { url: proxy.url, accounts: [...proxy.accountIds], usedCount: proxy.accountIds.size } });
+  } catch (error) {
+    return res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+router.delete('/proxies', (req, res) => {
+  const proxyUrl = String(req.body?.proxyUrl || '').trim();
+  if (!proxyUrl) return res.status(400).json({ success: false, error: 'proxyUrl không hợp lệ' });
+  try {
+    proxyService.removeProxy(proxyUrl);
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(404).json({ success: false, error: error.message });
+  }
 });
 
 // API để lấy thông tin chi tiết một tài khoản

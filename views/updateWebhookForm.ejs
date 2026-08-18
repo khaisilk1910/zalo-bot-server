@@ -1,25 +1,18 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="UTF-8">
-    <title>Cập nhật Webhook URL</title>
-  </head>
-  <body>
-    <h2>Cập nhật 3 Webhook URL</h2>
-    <form action="/updateWebhook" method="post">
-      <div>
-        <label for="messageWebhookUrl">Message Webhook URL:</label>
-        <input type="text" id="messageWebhookUrl" name="messageWebhookUrl" placeholder="https://example.com/webhook-message" required>
-      </div>
-      <div>
-        <label for="groupEventWebhookUrl">Group Event Webhook URL:</label>
-        <input type="text" id="groupEventWebhookUrl" name="groupEventWebhookUrl" placeholder="https://example.com/webhook-group-event" required>
-      </div>
-      <div>
-        <label for="reactionWebhookUrl">Reaction Webhook URL:</label>
-        <input type="text" id="reactionWebhookUrl" name="reactionWebhookUrl" placeholder="https://example.com/webhook-reaction" required>
-      </div>
-      <button type="submit">Cập nhật</button>
+<%- include('partials/head', { title: 'Webhook mặc định' }) %>
+<%- include('partials/header') %>
+<main class="page app-shell">
+  <a class="back-home" href="./">← Trang chủ</a>
+  <div class="page-header"><div><h1 class="page-title">Webhook mặc định</h1><p class="page-subtitle">Cấu hình tương thích cũ. Với cấu hình mới, nên dùng trang Webhook để gắn nhiều đích đến cho từng ID tài khoản.</p></div><a class="btn btn-primary" href="./account-webhook-manager">Mở Webhook đa đích</a></div>
+  <section class="card" style="max-width:760px">
+    <form id="legacyWebhookForm" class="form-grid">
+      <div class="form-row"><label for="messageWebhookUrl">Webhook tin nhắn</label><input class="input" type="url" id="messageWebhookUrl" required placeholder="https://example.com/webhook/message"></div>
+      <div class="form-row"><label for="groupEventWebhookUrl">Webhook sự kiện nhóm</label><input class="input" type="url" id="groupEventWebhookUrl" required placeholder="https://example.com/webhook/group"></div>
+      <div class="form-row"><label for="reactionWebhookUrl">Webhook reaction</label><input class="input" type="url" id="reactionWebhookUrl" required placeholder="https://example.com/webhook/reaction"></div>
+      <button class="btn btn-primary" type="submit">Lưu webhook mặc định</button>
     </form>
-  </body>
-</html>
+  </section>
+</main>
+<script>
+document.getElementById('legacyWebhookForm').addEventListener('submit',async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{const body={messageWebhookUrl:document.getElementById('messageWebhookUrl').value.trim(),groupEventWebhookUrl:document.getElementById('groupEventWebhookUrl').value.trim(),reactionWebhookUrl:document.getElementById('reactionWebhookUrl').value.trim()};const response=await fetch(zaloUi.path('/updateWebhook'),{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok||!data.success)throw new Error(data.error||'Không thể lưu');zaloUi.toast('Đã cập nhật webhook mặc định','success');}catch(error){zaloUi.toast(error.message,'error');}finally{button.disabled=false;}});
+</script>
+<%- include('partials/footer') %>

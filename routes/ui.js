@@ -68,49 +68,19 @@ router.get('/list', (req, res) => {
     res.render('api-doc', { baseUrl });
 });
 
-// Lấy danh sách tài khoản đã đăng nhập
+// Trang quản lý tài khoản. Giữ JSON response khi client cũ yêu cầu application/json.
 router.get('/accounts', (req, res) => {
-    if (zaloAccounts.length === 0) {
-        return res.json({ success: true, message: 'Chưa có tài khoản nào đăng nhập' });
-    }
-
     const accounts = zaloAccounts.map(account => ({
         ownId: account.ownId,
         proxy: account.proxy,
         phoneNumber: account.phoneNumber || 'N/A',
+        isOnline: !!account.api,
     }));
-
-    // Tạo bảng HTML cho các yêu cầu từ trình duyệt
-    let html = '<table border="1">';
-    html += '<thead><tr>';
-    const headers = ['Own ID', 'Phone Number', 'Proxy'];
-    headers.forEach(header => {
-        html += `<th>${header}</th>`;
-    });
-    html += '</tr></thead><tbody>';
-    accounts.forEach((account) => {
-        html += '<tr>';
-        html += `<td>${account.ownId}</td>`;
-        html += `<td>${account.phoneNumber || 'N/A'}</td>`;
-        html += `<td>${account.proxy || 'Không có'}</td>`;
-        html += '</tr>';
-    });
-    html += '</tbody></table>';
-
-    // Kiểm tra Accept header để quyết định định dạng trả về
     const acceptHeader = req.headers.accept || '';
-
-    if (acceptHeader.includes('application/json')) {
-        // Trả về JSON cho API calls
-        return res.json({
-            success: true,
-            accounts: accounts,
-            html: html
-        });
-    } else {
-        // Trả về HTML cho truy cập trực tiếp từ trình duyệt
-        res.send(html);
+    if (acceptHeader.includes('application/json') && !acceptHeader.includes('text/html')) {
+        return res.json({ success: true, accounts, data: accounts, total: accounts.length });
     }
+    return res.render('accounts');
 });
 
 // Endpoint cập nhật 3 webhook URL
@@ -133,39 +103,40 @@ router.post('/updateWebhook', (req, res) => {
   return res.json({ success: true, message: 'Webhook URLs đã được cập nhật' });
 });
 
-// API quản lý proxy
-// Lấy danh sách proxy hiện có
+// Trang quản lý proxy. API CRUD mới nằm tại /api/proxies.
 router.get('/proxies', (req, res) => {
-  res.json({ success: true, data: proxyService.getPROXIES() });
+  const acceptHeader = req.headers.accept || '';
+  if (acceptHeader.includes('application/json') && !acceptHeader.includes('text/html')) {
+    return res.json({ success: true, data: proxyService.getPROXIES() });
+  }
+  return res.render('proxies');
 });
 
-// Thêm một proxy mới
+// Legacy root CRUD endpoints retained for backward compatibility.
 router.post('/proxies', (req, res) => {
-  const { proxyUrl } = req.body;
-  if (!proxyUrl) {
-      return res.status(400).json({ success: false, error: 'proxyUrl không hợp lệ' });
-  }
+  const proxyUrl = String(req.body?.proxyUrl || '').trim();
+  if (!proxyUrl) return res.status(400).json({ success: false, error: 'proxyUrl không hợp lệ' });
   try {
-      const newProxy = proxyService.addProxy(proxyUrl);
-      res.json({ success: true, data: newProxy });
+    const proxy = proxyService.addProxy(proxyUrl);
+    return res.json({ success: true, data: { url: proxy.url, accounts: [...proxy.accountIds], usedCount: proxy.accountIds.size } });
   } catch (error) {
-      res.status(400).json({ success: false, error: error.message });
+    return res.status(400).json({ success: false, error: error.message });
   }
 });
 
-// Xóa một proxy
 router.delete('/proxies', (req, res) => {
-  const { proxyUrl } = req.body;
-  if (!proxyUrl) {
-      return res.status(400).json({ success: false, error: 'proxyUrl không hợp lệ' });
-  }
+  const proxyUrl = String(req.body?.proxyUrl || '').trim();
+  if (!proxyUrl) return res.status(400).json({ success: false, error: 'proxyUrl không hợp lệ' });
   try {
-      proxyService.removeProxy(proxyUrl);
-      res.json({ success: true, message: 'Xóa proxy thành công' });
+    proxyService.removeProxy(proxyUrl);
+    return res.json({ success: true });
   } catch (error) {
-      res.status(500).json({ success: false, error: error.message });
+    return res.status(404).json({ success: false, error: error.message });
   }
 });
+
+router.get('/login', (_req, res) => res.redirect(302, './zalo-login'));
+router.get('/webhooks', (_req, res) => res.redirect(302, './account-webhook-manager'));
 
 // Route test session
 router.get('/session-test', (req, res) => {
@@ -201,7 +172,8 @@ router.get('/change-password', (req, res) => {
 // Hiển thị trang reset mật khẩu admin
 router.get('/reset-password', (req, res) => {
     if (process.env.ENABLE_ADMIN_PASSWORD_RESET !== 'true') return res.status(404).send('Not found');
-    res.render('reset-password');
+    if (!req.session?.authenticated || req.session.role !== 'admin') return res.status(403).send('Chỉ admin mới có thể truy cập.');
+    return res.render('reset-password');
 });
 
 // Route hiển thị tin nhắn và thread_id

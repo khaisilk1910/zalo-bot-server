@@ -1,1 +1,5 @@
- 
+<%- include('partials/head', { title: 'Session debug' }) %>
+<%- include('partials/header') %>
+<main class="page app-shell"><a class="back-home" href="./">← Trang chủ</a><div class="page-header"><div><h1 class="page-title">Session debug</h1><p class="page-subtitle">Trang này chỉ khả dụng khi ENABLE_DEBUG_ENDPOINTS=true.</p></div></div><section class="card"><pre class="code" id="sessionOutput">Đang tải...</pre></section></main>
+<script>zaloUi.json('/api/session-test').then(data=>{document.getElementById('sessionOutput').textContent=JSON.stringify(data,null,2)}).catch(error=>{document.getElementById('sessionOutput').textContent=error.message});</script>
+<%- include('partials/footer') %>

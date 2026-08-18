@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import fetch from 'node-fetch';
 import { Transform } from 'stream';
 import { pipeline } from 'stream/promises';
-import { getWebhookUrl as getConfigWebhookUrl } from '../services/webhookService.js';
+import { getWebhookUrl as getConfigWebhookUrl, getWebhookTargets as getConfigWebhookTargets } from '../services/webhookService.js';
 import { getDataDirectory, getDataFilePath } from '../config/addon.js';
 
 const DEFAULT_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
@@ -48,6 +48,10 @@ export function getProxiesFilePath() {
 
 export function getWebhookUrl(key, ownId) {
     return getConfigWebhookUrl(key, ownId);
+}
+
+export function getWebhookTargets(eventType, ownId) {
+    return getConfigWebhookTargets(eventType, ownId);
 }
 
 export async function triggerN8nWebhook(msg, webhookUrl) {

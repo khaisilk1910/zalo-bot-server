@@ -1,221 +1,67 @@
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quản lý Zalo - MultiZlogin</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.1/css/all.min.css">
-    <style>
-        body {
-            background-color: #f8f9fa;
-        }
-        .dashboard-container {
-            padding: 30px;
-            margin-top: 30px;
-            border-radius: 10px;
-            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
-            background-color: white;
-        }
-        .dashboard-heading {
-            margin-bottom: 30px;
-            color: #343a40;
-        }
-        .feature-card {
-            transition: all 0.3s ease;
-            margin-bottom: 20px;
-            height: 100%;
-        }
-        .feature-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
-        }
-        .card-icon {
-            font-size: 3rem;
-            margin-bottom: 15px;
-            color: #007bff;
-        }
-        .footer {
-            margin-top: 50px;
-            padding: 20px 0;
-            color: #6c757d;
-        }
-        .user-info {
-            background-color: #f0f8ff;
-            padding: 10px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .logout-btn {
-            background-color: #ff3b30;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        .login-btn, .admin-btn {
-            background-color: #007aff;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 4px;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-block;
-            margin-left: 10px;
-        }
-        .admin-links {
-            margin-top: 10px;
-        }
-        .feature-links {
-            margin-top: 20px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-        .feature-link {
-            background-color: #4CAF50;
-            color: white;
-            text-decoration: none;
-            padding: 10px 15px;
-            border-radius: 4px;
-            display: inline-block;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="dashboard-container">
-            <div class="text-center mb-5">
-                <h1 class="dashboard-heading">MultiZlogin</h1>
-                <p class="lead">Hệ thống quản lý đa tài khoản Zalo</p>
-            </div>
-
-            <div class="user-info">
-                <% if (authenticated) { %>
-                    <div>
-                        <span>Đăng nhập với tài khoản: <strong><%= username %></strong></span>
-                        <div class="admin-links">
-                            <a href="/change-password" class="admin-btn">Đổi mật khẩu</a>
-                            <% if (isAdmin) { %>
-                                <a href="/user-management" class="admin-btn">Quản lý người dùng</a>
-                            <% } %>
-                        </div>
-                    </div>
-                    <button class="logout-btn" onclick="logout()">Đăng xuất</button>
-                <% } else { %>
-                    <span>Chưa đăng nhập</span>
-                    <a href="/admin-login" class="login-btn">Đăng nhập</a>
-                <% } %>
-            </div>
-
-            <div class="row mb-4">
-                <div class="col">
-                    <a href="/zalo-login" class="btn btn-block btn-primary">
-                        <i class="fas fa-sign-in-alt"></i> Đăng nhập Zalo
-                    </a>
-                </div>
-                <div class="col">
-                    <a href="/accounts" class="btn btn-block btn-info">
-                        <i class="fas fa-users"></i> Quản lý tài khoản
-                    </a>
-                </div>
-                <div class="col">
-                    <a href="/proxies" class="btn btn-block btn-secondary">
-                        <i class="fas fa-globe"></i> Quản lý Proxy
-                    </a>
-                </div>
-                <div class="col">
-                    <a href="/account-webhook-manager" class="btn btn-block btn-success">
-                        <i class="fas fa-link"></i> Quản lý Webhook
-                    </a>
-                </div>
-            </div>
-
-            <!-- Thêm nút mới để theo dõi tin nhắn và lấy thread_id -->
-            <div class="row mb-4">
-                <div class="col">
-                    <a href="/messages" class="btn btn-block btn-warning">
-                        <i class="fas fa-comments"></i> Theo dõi tin nhắn và lấy Thread ID
-                    </a>
-                </div>
-            </div>
-
-            <div class="row mt-5">
-                <div class="col-md-4">
-                    <div class="card feature-card">
-                        <div class="card-body text-center">
-                            <div class="card-icon">
-                                <i class="fas fa-sign-in-alt"></i>
-                            </div>
-                            <h5 class="card-title">Đăng nhập Zalo</h5>
-                            <p class="card-text">Đăng nhập tài khoản Zalo thông qua QR code, hỗ trợ đăng nhập qua proxy.</p>
-                            <a href="/zalo-login" class="btn btn-primary">Đăng nhập</a>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="col-md-4">
-                    <div class="card feature-card">
-                        <div class="card-body text-center">
-                            <div class="card-icon">
-                                <i class="fas fa-users"></i>
-                            </div>
-                            <h5 class="card-title">Quản lý tài khoản</h5>
-                            <p class="card-text">Quản lý tất cả tài khoản Zalo đã đăng nhập, cài đặt webhook và thông báo.</p>
-                            <a href="/accounts" class="btn btn-info">Quản lý</a>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="col-md-4">
-                    <div class="card feature-card">
-                        <div class="card-body text-center">
-                            <div class="card-icon">
-                                <i class="fas fa-globe"></i>
-                            </div>
-                            <h5 class="card-title">Quản lý Proxy</h5>
-                            <p class="card-text">Thiết lập và quản lý danh sách proxy để sử dụng cho đăng nhập tài khoản Zalo.</p>
-                            <a href="/proxies" class="btn btn-secondary">Cài đặt</a>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <footer class="footer text-center">
-            <p>MultiZlogin &copy; 2025 - Hệ thống quản lý đa tài khoản Zalo</p>
-        </footer>
+<%- include('partials/head', { title: 'Tổng quan' }) %>
+<%- include('partials/header') %>
+<main class="page app-shell">
+  <section class="hero">
+    <span class="eyebrow">● Hệ thống quản lý đa tài khoản</span>
+    <h1>Zalo Bot Server</h1>
+    <p>Đăng nhập nhiều tài khoản Zalo, theo dõi tin nhắn thời gian thực, quản lý proxy, webhook nhiều đích đến và sử dụng đầy đủ API từ một giao diện thống nhất.</p>
+    <div class="hero-actions">
+      <% if (authenticated) { %>
+        <a class="btn btn-primary" href="./zalo-login">＋ Thêm tài khoản Zalo</a>
+        <a class="btn btn-secondary" href="./messages">◉ Theo dõi tin nhắn</a>
+        <a class="btn btn-secondary" href="./account-webhook-manager">⌁ Quản lý Webhook</a>
+      <% } else { %>
+        <a class="btn btn-primary" href="./admin-login">Đăng nhập quản trị</a>
+      <% } %>
     </div>
+  </section>
 
-    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
-    <script>
-        function logout() {
-            fetch('/api/logout', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    window.location.reload();
-                } else {
-                    alert('Lỗi khi đăng xuất: ' + data.message);
-                }
-            })
-            .catch(error => {
-                console.error('Lỗi:', error);
-                alert('Đã xảy ra lỗi khi đăng xuất');
-            });
-        }
-    </script>
-</body>
-</html>
+  <% if (authenticated) { %>
+  <section class="section grid grid-4" aria-label="Trạng thái hệ thống">
+    <article class="card stat"><div class="stat-value" id="statAccounts">…</div><div class="stat-label">Tài khoản Zalo đang nạp</div></article>
+    <article class="card stat"><div class="stat-value" id="statWebhookAccounts">…</div><div class="stat-label">ID có cấu hình Webhook</div></article>
+    <article class="card stat"><div class="stat-value" id="statWebhooks">…</div><div class="stat-label">Webhook đang bật</div></article>
+    <article class="card stat"><div class="stat-value" id="statProxies">…</div><div class="stat-label">Proxy đã cấu hình</div></article>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><h2>Tính năng</h2><span class="badge badge-success">Sẵn sàng</span></div>
+    <div class="grid grid-3">
+      <a class="card hover" href="./zalo-login" style="text-decoration:none"><div class="feature-icon">▣</div><h3 class="card-title">Đăng nhập Zalo</h3><p class="card-text">Quét QR, chọn proxy và thêm nhiều tài khoản vào server.</p></a>
+      <a class="card hover" href="./accounts" style="text-decoration:none"><div class="feature-icon">◎</div><h3 class="card-title">Tài khoản</h3><p class="card-text">Xem trạng thái, ownId, số điện thoại và proxy của từng tài khoản.</p></a>
+      <a class="card hover" href="./account-webhook-manager" style="text-decoration:none"><div class="feature-icon">⌁</div><h3 class="card-title">Webhook đa đích</h3><p class="card-text">Một ID tài khoản có thể gửi message, group event và reaction đến nhiều webhook.</p></a>
+      <a class="card hover" href="./messages" style="text-decoration:none"><div class="feature-icon">✦</div><h3 class="card-title">Theo dõi tin nhắn</h3><p class="card-text">Xem sự kiện thời gian thực và sao chép thread_id nhanh chóng.</p></a>
+      <a class="card hover" href="./proxies" style="text-decoration:none"><div class="feature-icon">◌</div><h3 class="card-title">Proxy</h3><p class="card-text">Thêm, xóa và theo dõi số tài khoản đang sử dụng từng proxy.</p></a>
+      <a class="card hover" href="./list" style="text-decoration:none"><div class="feature-icon">{ }</div><h3 class="card-title">Tài liệu API</h3><p class="card-text">Tra cứu các endpoint Zalo Server và ví dụ payload tích hợp.</p></a>
+      <a class="card hover" href="./change-password" style="text-decoration:none"><div class="feature-icon">⌘</div><h3 class="card-title">Bảo mật</h3><p class="card-text">Đổi mật khẩu tài khoản quản trị đang đăng nhập.</p></a>
+      <% if (isAdmin) { %>
+      <a class="card hover" href="./user-management" style="text-decoration:none"><div class="feature-icon">♙</div><h3 class="card-title">Người dùng</h3><p class="card-text">Quản lý người dùng và quyền truy cập Zalo Bot Server.</p></a>
+      <% } %>
+      <article class="card"><div class="feature-icon">✓</div><h3 class="card-title">Tương thích Home Assistant</h3><p class="card-text">Giao diện dùng tài nguyên cục bộ, đường dẫn tương đối và API có xác thực session.</p></article>
+    </div>
+  </section>
+  <% } %>
+</main>
+<% if (authenticated) { %>
+<script>
+(async () => {
+  const set = (id, value) => { document.getElementById(id).textContent = String(value); };
+  try {
+    const [accounts, webhookAccounts, proxies] = await Promise.all([
+      zaloUi.json('/api/accounts').catch(() => ({data:[]})),
+      zaloUi.json('/api/webhook-accounts').catch(() => ({data:[]})),
+      zaloUi.json('/api/proxies').catch(() => ({data:[]})),
+    ]);
+    const wh = Array.isArray(webhookAccounts.data) ? webhookAccounts.data : [];
+    set('statAccounts', Array.isArray(accounts.data) ? accounts.data.length : 0);
+    set('statWebhookAccounts', wh.length);
+    set('statWebhooks', wh.reduce((sum, item) => sum + Number(item.enabledCount || 0), 0));
+    set('statProxies', Array.isArray(proxies.data) ? proxies.data.length : 0);
+  } catch {
+    ['statAccounts','statWebhookAccounts','statWebhooks','statProxies'].forEach(id => set(id, '—'));
+  }
+})();
+</script>
+<% } %>
+
+<%- include('partials/footer') %>

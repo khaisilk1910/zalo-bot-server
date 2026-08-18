@@ -1,0 +1,26 @@
+<div class="topbar-wrap">
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="Trang chủ Zalo Bot Server">
+        <span class="brand-mark">Z</span>
+        <span>Zalo Bot Server</span>
+      </a>
+      <% if (authenticated) { %>
+      <nav class="nav" aria-label="Điều hướng chính">
+        <a class="<%= currentPath === '/' ? 'active' : '' %>" href="./">Tổng quan</a>
+        <a class="<%= currentPath === '/zalo-login' ? 'active' : '' %>" href="./zalo-login">Đăng nhập Zalo</a>
+        <a class="<%= currentPath === '/accounts' ? 'active' : '' %>" href="./accounts">Tài khoản</a>
+        <a class="<%= currentPath === '/account-webhook-manager' ? 'active' : '' %>" href="./account-webhook-manager">Webhook</a>
+        <a class="<%= currentPath === '/messages' ? 'active' : '' %>" href="./messages">Tin nhắn</a>
+        <a class="<%= currentPath === '/proxies' ? 'active' : '' %>" href="./proxies">Proxy</a>
+        <a class="<%= currentPath === '/list' ? 'active' : '' %>" href="./list">API</a>
+      </nav>
+      <div class="user-pill">
+        <span class="user-dot"></span>
+        <span class="user-name"><%= username || 'Đã đăng nhập' %></span>
+        <button class="btn btn-secondary btn-sm" data-logout type="button">Đăng xuất</button>
+      </div>
+      <% } %>
+    </header>
+  </div>
+</div>

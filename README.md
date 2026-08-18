@@ -2,7 +2,7 @@
 
 Zalo Bot Server là server Node.js trung gian cho phép đăng nhập và điều khiển tài khoản Zalo thông qua `zca-js`, cung cấp Web UI, REST API, WebSocket, webhook và backend cho integration **Zalo Bot for Home Assistant**.
 
-> Phiên bản tài liệu này dành cho **Zalo Bot Server v1.1.0** (`zca-js` 2.1.2).
+> Phiên bản tài liệu này dành cho **Zalo Bot Server v1.2.0** (`zca-js` 2.1.2).
 >
 > Nguồn đối chiếu `zca-js`: repository upstream `RFS-ADRENO/zca-js`, release/tag chính thức của dự án và package `zca-js` trên npm. Lưu ý chính upstream xác nhận đây là API Zalo cá nhân **không chính thức của Zalo**, hoạt động bằng cách mô phỏng Zalo Web.
 
@@ -18,9 +18,9 @@ Zalo Bot Server là server Node.js trung gian cho phép đăng nhập và điề
 - Quản lý Auto Delete của cuộc trò chuyện với các mức Zalo hỗ trợ: `off`, `1d`, `7d`, `14d`.
 - Lấy lịch sử nhóm qua API Zalo khi khả dụng, có compatibility fallback `getrecentv2` và cache listener local bền vững.
 - Quản lý quick message, label, unread, mute, pin, archive và hidden conversation.
-- Webhook riêng cho message, group event và reaction; hỗ trợ cấu hình mặc định hoặc theo từng tài khoản.
+- Webhook đa đích: mỗi ID tài khoản có thể có nhiều webhook độc lập, chọn message/group event/reaction, bật/tắt, thử, sửa và xóa; vẫn tương thích cấu hình webhook cũ.
 - Quản lý proxy và gán proxy ổn định cho tài khoản.
-- Web UI quản trị, API docs và WebSocket realtime.
+- Web UI quản trị mới dùng giao diện thống nhất, responsive, tài nguyên cục bộ, có nút Trang chủ/điều hướng trên các trang chính; API docs và WebSocket realtime.
 - Session quản trị và dữ liệu runtime được lưu trong data volume để tồn tại qua restart/recreate container.
 - Health endpoint và Docker healthcheck.
 
@@ -212,15 +212,67 @@ Lưu ý:
 
 ## Webhook
 
-Server hỗ trợ ba loại webhook:
+Server hỗ trợ ba loại sự kiện webhook:
 
-- Message.
-- Group event.
-- Reaction.
+- `message` — tin nhắn.
+- `group_event` — sự kiện nhóm.
+- `reaction` — reaction.
 
-Có thể cấu hình URL mặc định bằng environment hoặc cấu hình riêng theo từng account trong Web UI/API.
+### Webhook đa đích theo ID tài khoản
 
-Các API quản lý webhook theo account:
+Từ v1.2.0, một **ID Tài Khoản** có thể có nhiều webhook. Mỗi webhook có:
+
+- Tên gợi nhớ.
+- URL HTTP/HTTPS.
+- Một hoặc nhiều loại sự kiện.
+- Trạng thái bật/tắt.
+
+ID cấu hình webhook có thể được **thêm, sửa, đổi ID và xóa** ngay cả khi tài khoản Zalo chưa đăng nhập. Xóa ID ở trang Webhook chỉ xóa cấu hình webhook, **không xóa credential/phiên Zalo**.
+
+Khi có event:
+
+1. Server tìm tất cả webhook đang bật của `ownId` có đăng ký event đó.
+2. Event được gửi đến **tất cả URL phù hợp**, có deduplicate URL.
+3. Nếu ID không có webhook phù hợp đang bật, server mới fallback sang webhook mặc định từ environment/config cũ.
+
+Cấu hình được lưu tại `/app/data/webhook-config.json` theo format `version: 2`. File v1 cũ có ba URL cố định/account sẽ được migrate tự động sang entry tương thích khi load, không làm mất URL cũ.
+
+API v2:
+
+```text
+GET    /api/webhook-accounts
+POST   /api/webhook-accounts
+GET    /api/webhook-accounts/:ownId
+PUT    /api/webhook-accounts/:ownId
+DELETE /api/webhook-accounts/:ownId
+
+POST   /api/webhook-accounts/:ownId/webhooks
+PUT    /api/webhook-accounts/:ownId/webhooks/:webhookId
+DELETE /api/webhook-accounts/:ownId/webhooks/:webhookId
+POST   /api/webhook-accounts/:ownId/webhooks/:webhookId/test
+```
+
+Ví dụ tạo ID:
+
+```json
+{
+  "ownId": "1234567890",
+  "label": "Zalo chính"
+}
+```
+
+Ví dụ thêm một webhook nhận nhiều loại sự kiện:
+
+```json
+{
+  "name": "n8n Home Assistant",
+  "url": "https://example.com/webhook/zalo",
+  "events": ["message", "group_event", "reaction"],
+  "enabled": true
+}
+```
+
+API webhook v1 vẫn được giữ để tránh làm hỏng integration/code cũ:
 
 ```text
 GET    /api/account-webhooks
@@ -229,11 +281,11 @@ POST   /api/account-webhook
 DELETE /api/account-webhook/:ownId
 ```
 
-Webhook request có timeout để tránh request treo làm ảnh hưởng listener.
+Webhook request có timeout để request chậm không làm treo listener Zalo.
 
 ## Proxy
 
-Có thể quản lý proxy từ Web UI hoặc API. Proxy được lưu trong:
+Có thể quản lý proxy từ Web UI hoặc API (`GET/POST/DELETE /api/proxies`). Proxy được lưu trong:
 
 ```text
 /app/data/proxies.json

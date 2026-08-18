@@ -1,8 +1,24 @@
 {
+  "version": 2,
   "default": {
     "messageWebhookUrl": "",
     "groupEventWebhookUrl": "",
     "reactionWebhookUrl": ""
   },
-  "accounts": {}
+  "accounts": {
+    "1234567890": {
+      "label": "Zalo chính",
+      "webhooks": [
+        {
+          "id": "example-webhook-id",
+          "name": "n8n Home Assistant",
+          "url": "https://example.com/webhook/zalo",
+          "events": ["message", "group_event", "reaction"],
+          "enabled": true,
+          "createdAt": "2026-08-18T00:00:00.000Z",
+          "updatedAt": "2026-08-18T00:00:00.000Z"
+        }
+      ]
+    }
+  }
 }

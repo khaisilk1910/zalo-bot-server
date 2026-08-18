@@ -1,0 +1,71 @@
+<%- include('partials/head', { title: 'Tài khoản Zalo' }) %>
+<%- include('partials/header') %>
+<main class="page app-shell">
+  <a class="back-home" href="./">← Trang chủ</a>
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Tài khoản Zalo</h1>
+      <p class="page-subtitle">Theo dõi các tài khoản đã đăng nhập vào server. ID tài khoản ở đây có thể được dùng trực tiếp cho API và cấu hình Webhook.</p>
+    </div>
+    <a class="btn btn-primary" href="./zalo-login">＋ Đăng nhập tài khoản</a>
+  </div>
+
+  <section class="grid grid-3 section">
+    <article class="card stat"><div class="stat-value" id="totalAccounts">…</div><div class="stat-label">Tổng tài khoản</div></article>
+    <article class="card stat"><div class="stat-value" id="onlineAccounts">…</div><div class="stat-label">Đang hoạt động</div></article>
+    <article class="card stat"><div class="stat-value" id="proxyAccounts">…</div><div class="stat-label">Đang dùng proxy</div></article>
+  </section>
+
+  <section class="section card">
+    <div class="toolbar">
+      <div><h2 class="card-title">Danh sách tài khoản</h2><p class="card-text">Dữ liệu được lấy trực tiếp từ các phiên Zalo đang nạp trong server.</p></div>
+      <button class="btn btn-secondary" id="reloadAccounts" type="button">↻ Làm mới</button>
+    </div>
+    <div id="accountsState" class="empty"><div class="skeleton" style="width:100%;height:46px"></div></div>
+    <div id="accountsTable" class="table-wrap" style="display:none;margin-top:16px">
+      <table>
+        <thead><tr><th>ID tài khoản</th><th>Số điện thoại</th><th>Proxy</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
+        <tbody id="accountRows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script>
+const loadAccounts = async () => {
+  const state = document.getElementById('accountsState');
+  const table = document.getElementById('accountsTable');
+  state.style.display = 'block'; table.style.display = 'none';
+  state.innerHTML = '<div class="skeleton" style="width:100%;height:46px"></div>';
+  try {
+    const response = await zaloUi.json('/api/accounts');
+    const accounts = Array.isArray(response.data) ? response.data : [];
+    document.getElementById('totalAccounts').textContent = accounts.length;
+    document.getElementById('onlineAccounts').textContent = accounts.filter(a => a.isOnline).length;
+    document.getElementById('proxyAccounts').textContent = accounts.filter(a => a.proxy && !String(a.proxy).includes('Không có')).length;
+    if (!accounts.length) {
+      state.innerHTML = '<div class="empty-icon">◎</div><strong>Chưa có tài khoản Zalo</strong><p>Hãy đăng nhập bằng QR để bắt đầu.</p><a class="btn btn-primary" href="./zalo-login">Đăng nhập Zalo</a>';
+      return;
+    }
+    const rows = document.getElementById('accountRows'); rows.innerHTML = '';
+    for (const account of accounts) {
+      const tr = document.createElement('tr');
+      const ownId = zaloUi.escape(account.ownId);
+      const phone = zaloUi.escape(account.phoneNumber || 'N/A');
+      const proxy = zaloUi.escape(account.proxy || 'Không có proxy');
+      tr.innerHTML = `<td><span class="code">${ownId}</span></td><td>${phone}</td><td><span class="code">${proxy}</span></td><td><span class="badge ${account.isOnline ? 'badge-success' : 'badge-muted'}">${account.isOnline ? '● Online' : '○ Offline'}</span></td><td><div class="actions" style="margin:0"><button class="btn btn-secondary btn-sm copy-id" data-id="${ownId}">Sao chép ID</button><a class="btn btn-ghost btn-sm" href="./account-webhook-manager?account=${encodeURIComponent(account.ownId)}">Webhook</a></div></td>`;
+      rows.appendChild(tr);
+    }
+    state.style.display = 'none'; table.style.display = 'block';
+  } catch (error) {
+    state.innerHTML = `<div class="notice notice-danger">${zaloUi.escape(error.message || 'Không thể tải tài khoản')}</div>`;
+  }
+};
+document.getElementById('reloadAccounts').addEventListener('click', loadAccounts);
+document.addEventListener('click', async (event) => {
+  const btn = event.target.closest('.copy-id'); if (!btn) return;
+  try { await navigator.clipboard.writeText(btn.dataset.id); zaloUi.toast('Đã sao chép ID tài khoản', 'success'); }
+  catch { zaloUi.toast('Không thể sao chép tự động', 'error'); }
+});
+loadAccounts();
+</script>
+<%- include('partials/footer') %>

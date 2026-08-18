@@ -72,6 +72,7 @@ if [ ! -f "$WEBHOOK_CONFIG_FILE" ]; then
   if [ -w "$DATA_DIRECTORY" ]; then
     cat > "$WEBHOOK_CONFIG_FILE" << EOF
 {
+  "version": 2,
   "default": {
     "messageWebhookUrl": "${MESSAGE_WEBHOOK_URL:-}",
     "groupEventWebhookUrl": "${GROUP_EVENT_WEBHOOK_URL:-}",

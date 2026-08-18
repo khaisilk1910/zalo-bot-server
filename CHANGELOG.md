@@ -12,6 +12,19 @@
 
 # Changelog
 
+## v1.2.0
+
+- Thiết kế lại Web UI theo một giao diện thống nhất, responsive, dùng CSS/JS cục bộ, không phụ thuộc CDN cho các trang chính.
+- Thêm thanh điều hướng và nút quay về Trang chủ trên các trang quản trị chính: QR login, tài khoản, webhook, tin nhắn, proxy, API docs, đổi mật khẩu và quản lý user.
+- Thêm trang quản lý tài khoản Zalo dạng dashboard tại `/accounts`; vẫn trả JSON tương thích khi client cũ yêu cầu `Accept: application/json`.
+- Sửa trang Proxy cũ vốn trả JSON trực tiếp và dùng endpoint không tồn tại; bổ sung `GET/POST/DELETE /api/proxies`.
+- Nâng cấu hình webhook lên format v2: mỗi ID tài khoản có thể có tối đa 50 webhook, mỗi webhook có tên, URL, danh sách event và trạng thái bật/tắt.
+- Thêm CRUD ID tài khoản webhook và CRUD/test webhook qua `/api/webhook-accounts/*`. ID webhook config có thể được tạo trước khi Zalo login và đổi ownId mà không ảnh hưởng credential Zalo.
+- Event listener gửi cùng một event tới mọi webhook phù hợp đang bật và deduplicate URL; chỉ fallback webhook mặc định khi account không có target phù hợp.
+- Tự migrate file `webhook-config.json` v1 (ba URL cố định/account) sang entry tương thích v2; giữ API `/api/account-webhook*` cũ để tránh breaking change.
+- Giữ nguyên cơ chế WebSocket `/ws` đã sửa ở bản messages-fixed, đồng thời đưa trang tin nhắn và QR vào UI mới mà không đổi luồng handshake/reconnect.
+
+
 ## v1.1.0
 
 - Nâng dependency ổn định từ `zca-js 2.0.4` lên **`zca-js 2.1.2`** và pin chính xác version để tránh thay đổi ngoài ý muốn.

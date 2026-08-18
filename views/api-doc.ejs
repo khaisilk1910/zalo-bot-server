@@ -3,14 +3,15 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>API Documentation</title>
+    <title>Tài liệu API · Zalo Bot Server</title>
+    <link rel="stylesheet" href="./ui.css">
     <style>
-      body { font-family: Arial, sans-serif; line-height: 1.6; margin: 20px; }
-      h1, h2, h3 { color: #333; }
+      body { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.6; width:min(1180px,calc(100% - 28px)); margin:24px auto 60px; color:#162033; }
+      h1, h2, h3 { color: #162033; letter-spacing:-.02em; }
       table { border-collapse: collapse; width: 100%; }
-      th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+      th, td { border: 1px solid #e4e8f0; padding: 10px; text-align: left; }
       th { background-color: #f4f4f4; }
-      pre { background: #f4f4f4; padding: 10px; border-radius: 4px; overflow: auto; }
+      pre { background: #f7f9fc; padding: 14px; border:1px solid #e4e8f0; border-radius: 12px; overflow: auto; }
       code { background: #f4f4f4; padding: 2px 4px; border-radius: 3px; }
       .endpoint { font-weight: bold; color: #0066cc; }
       a { color: #0066cc; text-decoration: none; }
@@ -18,9 +19,10 @@
     </style>
   </head>
   <body>
+    <div style="position:sticky;top:10px;z-index:20;display:flex;gap:8px;justify-content:flex-end;margin-bottom:16px"><a href="./" class="btn btn-secondary">← Trang chủ</a><a href="./account-webhook-manager" class="btn btn-primary">Webhook</a></div>
     <h1>Tài liệu API Zalo Server</h1>
     <p><strong>Base URL hiện tại:</strong> <code><%= baseUrl %></code></p>
-    <p><strong>Server:</strong> v1.1.0 &mdash; <strong>zca-js:</strong> 2.1.2</p>
+    <p><strong>Server:</strong> v1.2.0 &mdash; <strong>zca-js:</strong> 2.1.2</p>
 
     <div style="background:#eef6ff;border:1px solid #b8d8ff;padding:14px;border-radius:8px;margin:16px 0;">
       <strong>Đồng bộ zca-js 2.1.2:</strong> các API mới được expose dưới dạng <code>POST /api/*ByAccount</code>.
@@ -32,6 +34,18 @@
         <tr><td>Account/Conversation</td><td><code>getSettingsByAccount</code>, <code>updateActiveStatusByAccount</code>, <code>getBizAccountByAccount</code>, <code>updateProfileBioByAccount</code>, <code>updateArchivedChatListByAccount</code></td></tr>
       </table>
       <p style="margin-bottom:0;"><code>type</code> chấp nhận <code>user/0</code> hoặc <code>group/1</code>. Avatar size chấp nhận <code>small/120</code> hoặc <code>large/240</code>.</p>
+    </div>
+
+    <div style="background:#f4f7ff;border:1px solid #dbe6ff;padding:16px;border-radius:14px;margin:16px 0;">
+      <strong>Webhook đa đích (v2):</strong> một ID tài khoản có thể có nhiều webhook và chọn loại sự kiện riêng.
+      <ul style="margin-bottom:0">
+        <li><code>GET/POST /api/webhook-accounts</code> — liệt kê / thêm ID cấu hình</li>
+        <li><code>GET/PUT/DELETE /api/webhook-accounts/:ownId</code> — xem / sửa / xóa ID</li>
+        <li><code>POST /api/webhook-accounts/:ownId/webhooks</code> — thêm webhook</li>
+        <li><code>PUT/DELETE /api/webhook-accounts/:ownId/webhooks/:webhookId</code> — sửa / xóa webhook</li>
+        <li><code>POST /api/webhook-accounts/:ownId/webhooks/:webhookId/test</code> — gửi payload kiểm tra</li>
+      </ul>
+      <p style="margin-bottom:0;margin-top:8px">Các endpoint <code>/api/account-webhook*</code> cũ vẫn được giữ để tương thích.</p>
     </div>
 
     <h2>Mục lục</h2>
