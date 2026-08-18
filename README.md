@@ -250,7 +250,7 @@ Khi có event:
 2. Event được gửi đến **tất cả URL phù hợp**, có deduplicate URL.
 3. Nếu ID không có webhook phù hợp đang bật, server mới fallback sang webhook mặc định từ environment/config cũ.
 
-Cấu hình được lưu tại `/app/data/webhook-config.json` theo format `version: 2`. File v1 cũ có ba URL cố định/account sẽ được migrate tự động sang entry tương thích khi load, không làm mất URL cũ.
+Cấu hình được lưu tại `/app/data/webhook-config.json` theo format `version: 2`. File v1 cũ có ba URL cố định/account sẽ được migrate tự động sang entry tương thích khi load, không làm mất URL cũ. Nếu nhiều loại sự kiện cũ dùng cùng một URL, chúng được gom thành **một webhook đa sự kiện** để trang Quản lý Webhook không hiển thị ba thẻ trùng nhau.
 
 API v2:
 

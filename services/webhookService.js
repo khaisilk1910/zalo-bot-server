@@ -75,14 +75,116 @@ function compatWebhookId(eventType) {
   return `compat-${String(eventType).replace(/[^a-z0-9_-]/gi, '-')}`;
 }
 
+function isCompatibilityWebhook(webhook) {
+  return typeof webhook?.id === 'string' && webhook.id.startsWith('compat-');
+}
+
+function orderedEvents(events) {
+  const eventSet = new Set(normalizeEvents(events));
+  return WEBHOOK_EVENTS.filter((eventType) => eventSet.has(eventType));
+}
+
+function compatibilityWebhookId(events) {
+  const normalized = orderedEvents(events);
+  if (normalized.length === WEBHOOK_EVENTS.length) return 'compat-default';
+  if (normalized.length === 1) return compatWebhookId(normalized[0]);
+  return `compat-${normalized.join('-')}`;
+}
+
+function compatibilityWebhookName(events) {
+  const normalized = orderedEvents(events);
+  if (normalized.length > 1) return 'Webhook mặc định (tương thích cũ)';
+  return `${EVENT_LABEL[normalized[0]] || 'Webhook'} (tương thích cũ)`;
+}
+
+function getCompatibilityAssignments(webhooks = []) {
+  const assignments = new Map();
+  for (const webhook of webhooks) {
+    if (!isCompatibilityWebhook(webhook) || !webhook.url) continue;
+    for (const eventType of orderedEvents(webhook.events)) {
+      // The old format has exactly one destination per event. If a malformed
+      // config contains duplicates, keep the first one to make migration
+      // deterministic and avoid creating duplicate compatibility targets.
+      if (assignments.has(eventType)) continue;
+      assignments.set(eventType, {
+        url: webhook.url,
+        enabled: webhook.enabled !== false,
+        createdAt: webhook.createdAt,
+        updatedAt: webhook.updatedAt,
+        sourceId: webhook.id,
+        sourceName: webhook.name,
+      });
+    }
+  }
+  return assignments;
+}
+
+function buildCompatibilityWebhooks(assignments) {
+  const groups = new Map();
+  for (const eventType of WEBHOOK_EVENTS) {
+    const assignment = assignments.get(eventType);
+    if (!assignment?.url) continue;
+    const key = `${assignment.enabled !== false ? '1' : '0'}\u0000${assignment.url}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ eventType, ...assignment });
+  }
+
+  return [...groups.values()].map((entries) => {
+    const events = entries.map((entry) => entry.eventType);
+    const sourceIds = new Set(entries.map((entry) => entry.sourceId).filter(Boolean));
+    const sourceNames = new Set(entries.map((entry) => entry.sourceName).filter(Boolean));
+    const preserveSource = sourceIds.size === 1
+      && entries.every((entry) => entry.sourceId && sourceIds.has(entry.sourceId));
+    const id = preserveSource ? [...sourceIds][0] : compatibilityWebhookId(events);
+    const name = preserveSource && sourceNames.size === 1
+      ? [...sourceNames][0]
+      : compatibilityWebhookName(events);
+    const createdAt = entries.map((entry) => entry.createdAt).filter(Boolean).sort()[0];
+    const updatedAt = entries.map((entry) => entry.updatedAt).filter(Boolean).sort().at(-1);
+
+    return normalizeWebhook({
+      id,
+      name,
+      url: entries[0].url,
+      events,
+      enabled: entries[0].enabled !== false,
+      createdAt,
+      updatedAt,
+    }, id);
+  });
+}
+
+function replaceCompatibilityWebhooks(webhooks = [], assignments = new Map()) {
+  const current = Array.isArray(webhooks) ? webhooks : [];
+  const firstCompatIndex = current.findIndex(isCompatibilityWebhook);
+  const insertIndex = firstCompatIndex === -1
+    ? current.length
+    : current.slice(0, firstCompatIndex).filter((item) => !isCompatibilityWebhook(item)).length;
+  const regular = current.filter((item) => !isCompatibilityWebhook(item));
+  const compatibility = buildCompatibilityWebhooks(assignments);
+  return [
+    ...regular.slice(0, insertIndex),
+    ...compatibility,
+    ...regular.slice(insertIndex),
+  ];
+}
+
+function compactCompatibilityWebhooks(webhooks = []) {
+  const current = Array.isArray(webhooks) ? webhooks : [];
+  if (!current.some(isCompatibilityWebhook)) return current;
+  return replaceCompatibilityWebhooks(current, getCompatibilityAssignments(current));
+}
+
 function normalizeAccount(raw = {}) {
   const timestamp = nowIso();
-  const webhooks = Array.isArray(raw?.webhooks)
+  let webhooks = Array.isArray(raw?.webhooks)
     ? raw.webhooks.map((item) => normalizeWebhook(item)).filter((item) => item.url && item.events.length)
     : [];
 
-  // Migrate v1's three fixed URLs into stable compatibility entries. The
-  // public v1 API still works, but the canonical file format is now v2.
+  // Migrate v1's three fixed URLs into compatibility entries. When two or
+  // more legacy event types use the same URL they are compacted into one
+  // multi-event webhook, so the modern manager shows one card instead of
+  // three identical cards.
   for (const [legacyKey, eventType] of Object.entries(LEGACY_KEY_TO_EVENT)) {
     const legacyUrl = normalizeUrl(raw?.[legacyKey]);
     if (!legacyUrl) continue;
@@ -99,6 +201,8 @@ function normalizeAccount(raw = {}) {
       }, compatWebhookId(eventType)));
     }
   }
+
+  webhooks = compactCompatibilityWebhooks(webhooks);
 
   return {
     label: cleanText(raw?.label, 100),
@@ -153,7 +257,12 @@ function ensureAccount(ownId, label = '') {
 }
 
 function derivedLegacyUrl(account, eventType) {
-  const compat = account?.webhooks?.find((item) => item.id === compatWebhookId(eventType) && item.enabled && item.url);
+  const compat = account?.webhooks?.find((item) => (
+    isCompatibilityWebhook(item)
+    && item.enabled
+    && item.url
+    && item.events.includes(eventType)
+  ));
   if (compat) return compat.url;
   return account?.webhooks?.find((item) => item.enabled && item.url && item.events.includes(eventType))?.url || '';
 }
@@ -240,29 +349,31 @@ export function setAccountWebhookUrls(ownId, values = {}) {
   const account = ensureAccount(ownId);
   if (!account) return false;
 
+  const assignments = getCompatibilityAssignments(account.webhooks);
+  const timestamp = nowIso();
+
   for (const [legacyKey, eventType] of Object.entries(LEGACY_KEY_TO_EVENT)) {
     if (!Object.prototype.hasOwnProperty.call(values, legacyKey)) continue;
     const url = normalizeUrl(values[legacyKey]);
-    const id = compatWebhookId(eventType);
-    const index = account.webhooks.findIndex((item) => item.id === id);
     if (!url) {
-      if (index !== -1) account.webhooks.splice(index, 1);
+      assignments.delete(eventType);
       continue;
     }
 
-    const next = normalizeWebhook({
-      ...(index !== -1 ? account.webhooks[index] : {}),
-      id,
-      name: `${EVENT_LABEL[eventType]} (tương thích cũ)`,
+    const current = assignments.get(eventType);
+    assignments.set(eventType, {
       url,
-      events: [eventType],
       enabled: true,
-      updatedAt: nowIso(),
-    }, id);
-    if (index === -1) account.webhooks.push(next);
-    else account.webhooks[index] = next;
+      createdAt: current?.createdAt || timestamp,
+      updatedAt: timestamp,
+      // Mark the changed event as a fresh compatibility assignment. Rebuild
+      // will automatically merge it with other legacy events using the same URL.
+      sourceId: '',
+      sourceName: '',
+    });
   }
 
+  account.webhooks = replaceCompatibilityWebhooks(account.webhooks, assignments);
   touchAccount(account);
   return saveWebhookConfig();
 }

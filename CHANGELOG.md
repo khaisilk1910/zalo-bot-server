@@ -1,3 +1,9 @@
+## 2026-08-18 - Gom webhook tương thích cũ theo URL
+
+- Tự động gom các webhook `Tin nhắn`, `Sự kiện nhóm`, `Reaction` dạng tương thích cũ khi chúng dùng cùng một URL thành một webhook đa sự kiện duy nhất trên trang Quản lý Webhook.
+- Giữ nguyên khả năng tách riêng khi ba loại sự kiện dùng URL hoặc trạng thái bật/tắt khác nhau.
+- API webhook kiểu cũ vẫn hoạt động; khi cùng URL, cấu hình được lưu lại ở dạng gọn và không làm thay đổi số đích nhận sự kiện thực tế.
+
 ## 2026-08-18 - Fix trang theo dõi tin nhắn WebSocket
 
 - Sửa `messages.ejs` kết nối sai WebSocket root; frontend và server nay dùng đúng endpoint `/ws`.
