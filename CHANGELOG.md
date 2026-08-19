@@ -1,3 +1,11 @@
+## 2026-08-19 - Tự tạo thumbnail video từ frame
+
+- Phiên bản server: `1.2.3`.
+- Khi `thumbnailUrl` bị bỏ trống hoặc thumbnail tùy chỉnh không tải được, server tự trích một frame JPEG từ video đã tải bằng `ffmpeg`, upload thumbnail đó lên Zalo rồi mới gọi `sendVideo`.
+- Việc trích frame chạy bằng child process bất đồng bộ, không chặn Node.js event loop.
+- Docker image cài sẵn `ffmpeg`; có thể chỉnh timeout bằng `VIDEO_THUMBNAIL_TIMEOUT_MS` (mặc định 30 giây).
+- Nếu ffmpeg/thumbnail upload thất bại, vẫn giữ fallback tương thích để việc gửi video không bị hỏng hoàn toàn.
+
 ## 2026-08-19 - Fix video không tồn tại / upload bền vững lên Zalo
 
 - Sửa `sendVideoByAccount`: không còn gửi trực tiếp URL HTTP tạm của Home Assistant vào `zca-js sendVideo()`.

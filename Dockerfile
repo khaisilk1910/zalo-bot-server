@@ -1,5 +1,5 @@
 FROM node:22-alpine
-RUN apk add --no-cache jq
+RUN apk add --no-cache jq ffmpeg
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./

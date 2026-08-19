@@ -5,12 +5,15 @@ import crypto from 'crypto';
 import fetch from 'node-fetch';
 import { Transform } from 'stream';
 import { pipeline } from 'stream/promises';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { getWebhookUrl as getConfigWebhookUrl, getWebhookTargets as getConfigWebhookTargets } from '../services/webhookService.js';
 import { getDataDirectory, getDataFilePath } from '../config/addon.js';
 
 const DEFAULT_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const DEFAULT_FILE_MAX_BYTES = 150 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 30_000;
+const execFileAsync = promisify(execFile);
 
 function positiveIntEnv(name, fallback) {
     const value = Number.parseInt(process.env[name] || '', 10);
@@ -213,6 +216,61 @@ export async function saveImages(urls, concurrency = 4) {
 
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
     return results;
+}
+
+
+/**
+ * Extract a JPEG thumbnail from a local video without blocking Node's event loop.
+ * Returns the generated image path, or null when ffmpeg is unavailable / extraction fails.
+ */
+export async function createVideoThumbnail(videoPath) {
+    let thumbnailPath = null;
+    try {
+        if (!videoPath) return null;
+
+        const tempDir = path.join(os.tmpdir(), 'zalo-bot-images');
+        await fs.promises.mkdir(tempDir, { recursive: true });
+        thumbnailPath = path.join(tempDir, `${Date.now()}-${crypto.randomUUID()}-video-thumb.jpg`);
+
+        const timeoutMs = positiveIntEnv('VIDEO_THUMBNAIL_TIMEOUT_MS', 30_000);
+        const baseArgs = [
+            '-hide_banner',
+            '-loglevel', 'error',
+            '-y',
+            '-i', videoPath,
+            '-frames:v', '1',
+            '-vf', "scale=w='min(1280,iw)':h=-2",
+            '-q:v', '3',
+            thumbnailPath,
+        ];
+
+        // Prefer a frame shortly after the beginning to avoid black first frames.
+        // If a very short/corrupt clip cannot seek there, retry from frame zero.
+        try {
+            await execFileAsync('ffmpeg', ['-ss', '0.5', ...baseArgs], {
+                timeout: timeoutMs,
+                maxBuffer: 1024 * 1024,
+                windowsHide: true,
+            });
+        } catch (firstError) {
+            await fs.promises.rm(thumbnailPath, { force: true }).catch(() => {});
+            await execFileAsync('ffmpeg', baseArgs, {
+                timeout: timeoutMs,
+                maxBuffer: 1024 * 1024,
+                windowsHide: true,
+            });
+        }
+
+        const stat = await fs.promises.stat(thumbnailPath);
+        if (!stat.isFile() || stat.size <= 0) {
+            throw new Error('ffmpeg không tạo được thumbnail hợp lệ');
+        }
+        return thumbnailPath;
+    } catch (error) {
+        if (thumbnailPath) await fs.promises.rm(thumbnailPath, { force: true }).catch(() => {});
+        console.warn('[Video] Không thể tự tạo thumbnail từ video:', error?.message || error);
+        return null;
+    }
 }
 
 export function removeImage(imgPath) {

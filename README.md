@@ -166,7 +166,9 @@ Sau khi quét QR, credential được lưu dưới data directory. Khi listener 
 
 Từ server `1.2.2`, endpoint `/api/sendVideoByAccount` không chuyển tiếp thẳng URL nguồn vào `sendVideo`. Server tải video/thumbnail nguồn về file tạm, upload attachment lên Zalo, sau đó gửi bằng URL do Zalo trả về và dọn file tạm. Điều này đặc biệt quan trọng khi nguồn là URL HTTP tạm do Home Assistant tạo.
 
-Có thể điều chỉnh thời gian chờ upload bằng biến môi trường `VIDEO_UPLOAD_TIMEOUT_MS` (mặc định `180000` ms).
+Từ server `1.2.3`, `thumbnailUrl` là tùy chọn thực sự. Nếu không truyền thumbnail (hoặc thumbnail tùy chỉnh không tải được), server dùng `ffmpeg` để lấy một frame từ video đã tải, tạo JPEG thumbnail và upload ảnh đó lên Zalo. Vì xử lý nằm ở Zalo Bot Server nên Home Assistant không cần tự chạy ffmpeg và không phát sinh I/O này trong quá trình khởi động integration.
+
+Có thể điều chỉnh thời gian chờ upload bằng `VIDEO_UPLOAD_TIMEOUT_MS` (mặc định `180000` ms) và thời gian chờ trích thumbnail bằng `VIDEO_THUMBNAIL_TIMEOUT_MS` (mặc định `30000` ms).
 
 ## Gửi nhiều ảnh
 

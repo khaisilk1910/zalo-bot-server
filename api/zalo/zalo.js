@@ -7,7 +7,7 @@ import { imageSizeFromFile } from "image-size/fromFile";
 import nodefetch from "node-fetch";
 import fs from 'fs';
 import path from 'path';
-import { saveImage, saveImages, removeImage, saveFileFromUrl, removeFile } from '../../utils/helpers.js';
+import { saveImage, saveImages, removeImage, saveFileFromUrl, removeFile, createVideoThumbnail } from '../../utils/helpers.js';
 import { writeJsonAtomicSync } from '../../utils/atomicFile.js';
 import { getRequestedMessageTtl, messageTtlResult, normalizeAutoDeleteTtl, normalizeMessageTtl, normalizeThreadType, withMessageTtl } from '../../utils/autoDelete.js';
 import { getCachedGroupHistory } from '../../utils/groupHistoryStore.js';
@@ -1761,6 +1761,16 @@ export async function sendVideoByAccount(req, res) {
             throw new Error('Không thể tải video nguồn để tải lên máy chủ Zalo');
         }
 
+        // If no custom thumbnail was supplied (or it could not be downloaded),
+        // extract a real JPEG frame from the already-downloaded video. This work
+        // happens on the Zalo Bot Server, not Home Assistant, and ffmpeg runs as
+        // an asynchronous child process so it does not block the Node event loop.
+        let thumbnailSource = thumbnailPath ? 'custom' : 'auto';
+        if (!thumbnailPath) {
+            thumbnailPath = await createVideoThumbnail(videoPath);
+            if (!thumbnailPath) thumbnailSource = 'fallback';
+        }
+
         const uploadTimeoutMs = Number.parseInt(process.env.VIDEO_UPLOAD_TIMEOUT_MS || '180000', 10);
         const safeUploadTimeoutMs = Number.isFinite(uploadTimeoutMs) && uploadTimeoutMs > 0
             ? uploadTimeoutMs
@@ -1796,11 +1806,12 @@ export async function sendVideoByAccount(req, res) {
         const uploadedThumbnail = Array.isArray(uploadedThumbnails)
             ? uploadedThumbnails.find((item) => item?.fileType === 'image')
             : null;
+        if (!uploadedThumbnail) thumbnailSource = 'fallback';
         const durableThumbnailUrl = uploadedThumbnail?.thumbUrl
             || uploadedThumbnail?.normalUrl
             || uploadedThumbnail?.hdUrl
-            // sendVideo requires thumbnailUrl. When no thumbnail is supplied, keep
-            // a durable Zalo URL rather than the short-lived Home Assistant URL.
+            // Last-resort compatibility fallback only. In normal operation an
+            // omitted thumbnail is auto-extracted from the video and uploaded.
             || uploadedVideo.fileUrl;
 
         const durableOptions = {
@@ -1814,6 +1825,7 @@ export async function sendVideoByAccount(req, res) {
             success: true,
             data: result,
             videoStorage: 'zalo',
+            thumbnailSource,
             uploadedVideo: {
                 fileId: uploadedVideo.fileId,
                 fileUrl: uploadedVideo.fileUrl,
