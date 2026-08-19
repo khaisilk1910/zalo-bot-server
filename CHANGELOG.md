@@ -1,3 +1,12 @@
+## 2026-08-19 - Fix video không tồn tại / upload bền vững lên Zalo
+
+- Sửa `sendVideoByAccount`: không còn gửi trực tiếp URL HTTP tạm của Home Assistant vào `zca-js sendVideo()`.
+- Server tải video nguồn về file tạm, upload attachment lên máy chủ Zalo trước, rồi dùng `fileUrl` do Zalo trả về để gửi video. Video vì vậy không phụ thuộc vào HTTP server tạm sau khi action kết thúc.
+- Thumbnail local/URL được tải và upload lên Zalo riêng; nếu upload thumbnail lỗi, request video vẫn tiếp tục với fallback bền vững thay vì làm hỏng toàn bộ action.
+- Thêm timeout upload video (`VIDEO_UPLOAD_TIMEOUT_MS`, mặc định 180 giây) và luôn dọn file tạm trong `finally`.
+- Giữ nguyên `threadId` dạng string, `type`, per-message TTL và account selection.
+- Phiên bản server: `1.2.2`.
+
 ## 2026-08-18 - Bỏ trang Webhook mặc định
 
 - Bỏ nút/trang `Webhook mặc định` khỏi Web UI; URL cũ `/updateWebhookForm` nay chuyển thẳng về `/account-webhook-manager`.

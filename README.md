@@ -162,6 +162,12 @@ Sau khi quét QR, credential được lưu dưới data directory. Khi listener 
 
 Để giảm nguy cơ session bị đá, tránh mở cùng account trên Zalo Web trong khi bot listener đang chạy nếu không cần thiết.
 
+## Gửi video bền vững
+
+Từ server `1.2.2`, endpoint `/api/sendVideoByAccount` không chuyển tiếp thẳng URL nguồn vào `sendVideo`. Server tải video/thumbnail nguồn về file tạm, upload attachment lên Zalo, sau đó gửi bằng URL do Zalo trả về và dọn file tạm. Điều này đặc biệt quan trọng khi nguồn là URL HTTP tạm do Home Assistant tạo.
+
+Có thể điều chỉnh thời gian chờ upload bằng biến môi trường `VIDEO_UPLOAD_TIMEOUT_MS` (mặc định `180000` ms).
+
 ## Gửi nhiều ảnh
 
 Từ v1.0.5+, mỗi ảnh được tải vào một file tạm riêng bằng UUID. Điều này tránh lỗi trước đây khiến ảnh cuối cùng trong danh sách bị gửi lặp lại nhiều lần.

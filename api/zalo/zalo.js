@@ -1723,22 +1723,113 @@ export async function getStickersDetailByAccount(req, res) {
 }
 
 export async function sendVideoByAccount(req, res) {
+    let videoPath;
+    let thumbnailPath;
     try {
         const { options, threadId, type, accountSelection } = req.body;
         if (!options || !threadId) {
             return res.status(400).json({ error: 'options và threadId là bắt buộc' });
         }
+        if (!options.videoUrl) {
+            return res.status(400).json({ error: 'options.videoUrl là bắt buộc' });
+        }
+
         const account = getAccountFromSelection(accountSelection);
         const threadType = normalizeThreadType(type, ThreadType);
         const normalizedOptions = { ...options };
         if (Object.prototype.hasOwnProperty.call(normalizedOptions, 'ttl')) {
             normalizedOptions.ttl = normalizeMessageTtl(normalizedOptions.ttl) ?? 0;
         }
-        const result = await account.api.sendVideo(normalizedOptions, String(threadId), threadType);
-        res.json({ success: true, data: result, messageTtl: messageTtlResult(normalizedOptions.ttl), usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber } });
+
+        // zca-js sendVideo() only performs a HEAD request against videoUrl and then
+        // forwards that URL to Zalo. A Home Assistant/LAN temporary URL therefore
+        // produces a message whose media disappears as soon as the temporary HTTP
+        // server stops. Upload the media to Zalo first and forward the Zalo-hosted
+        // URLs so the video remains playable/downloadable on desktop and mobile.
+        const sourceVideoUrl = String(normalizedOptions.videoUrl);
+        const sourceThumbnailUrl = normalizedOptions.thumbnailUrl
+            ? String(normalizedOptions.thumbnailUrl)
+            : '';
+
+        const videoDownload = saveFileFromUrl(sourceVideoUrl);
+        const thumbnailDownload = sourceThumbnailUrl && sourceThumbnailUrl !== sourceVideoUrl
+            ? saveImage(sourceThumbnailUrl)
+            : Promise.resolve(null);
+
+        [videoPath, thumbnailPath] = await Promise.all([videoDownload, thumbnailDownload]);
+        if (!videoPath) {
+            throw new Error('Không thể tải video nguồn để tải lên máy chủ Zalo');
+        }
+
+        const uploadTimeoutMs = Number.parseInt(process.env.VIDEO_UPLOAD_TIMEOUT_MS || '180000', 10);
+        const safeUploadTimeoutMs = Number.isFinite(uploadTimeoutMs) && uploadTimeoutMs > 0
+            ? uploadTimeoutMs
+            : 180000;
+
+        const videoUploadPromise = withTimeout(
+            account.api.uploadAttachment(videoPath, String(threadId), threadType),
+            safeUploadTimeoutMs,
+            'Hết thời gian tải video lên Zalo'
+        );
+        const thumbnailUploadPromise = thumbnailPath
+            ? withTimeout(
+                account.api.uploadAttachment(thumbnailPath, String(threadId), threadType),
+                Math.min(safeUploadTimeoutMs, 60000),
+                'Hết thời gian tải thumbnail lên Zalo'
+            ).catch((error) => {
+                console.warn('[Video] Không thể upload thumbnail, tiếp tục với URL fallback:', error?.message || error);
+                return [];
+            })
+            : Promise.resolve([]);
+
+        const [uploadedVideos, uploadedThumbnails] = await Promise.all([
+            videoUploadPromise,
+            thumbnailUploadPromise
+        ]);
+        const uploadedVideo = Array.isArray(uploadedVideos)
+            ? uploadedVideos.find((item) => item?.fileType === 'video' && item?.fileUrl)
+            : null;
+        if (!uploadedVideo?.fileUrl) {
+            throw new Error('Zalo không trả về URL video sau khi upload');
+        }
+
+        const uploadedThumbnail = Array.isArray(uploadedThumbnails)
+            ? uploadedThumbnails.find((item) => item?.fileType === 'image')
+            : null;
+        const durableThumbnailUrl = uploadedThumbnail?.thumbUrl
+            || uploadedThumbnail?.normalUrl
+            || uploadedThumbnail?.hdUrl
+            // sendVideo requires thumbnailUrl. When no thumbnail is supplied, keep
+            // a durable Zalo URL rather than the short-lived Home Assistant URL.
+            || uploadedVideo.fileUrl;
+
+        const durableOptions = {
+            ...normalizedOptions,
+            videoUrl: uploadedVideo.fileUrl,
+            thumbnailUrl: durableThumbnailUrl,
+        };
+
+        const result = await account.api.sendVideo(durableOptions, String(threadId), threadType);
+        res.json({
+            success: true,
+            data: result,
+            videoStorage: 'zalo',
+            uploadedVideo: {
+                fileId: uploadedVideo.fileId,
+                fileUrl: uploadedVideo.fileUrl,
+                totalSize: uploadedVideo.totalSize,
+                fileName: uploadedVideo.fileName,
+            },
+            messageTtl: messageTtlResult(durableOptions.ttl),
+            usedAccount: { ownId: account.ownId, phoneNumber: account.phoneNumber }
+        });
     } catch (error) {
-        const status = /ttl|type không hợp lệ/i.test(error.message) ? 400 : 500;
-        res.status(status).json({ success: false, error: error.message });
+        const message = error instanceof Error ? error.message : String(error);
+        const status = /ttl|type không hợp lệ|videoUrl là bắt buộc/i.test(message) ? 400 : 500;
+        res.status(status).json({ success: false, error: message });
+    } finally {
+        if (videoPath) removeFile(videoPath);
+        if (thumbnailPath) removeImage(thumbnailPath);
     }
 }
 
