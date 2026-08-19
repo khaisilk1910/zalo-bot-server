@@ -114,9 +114,9 @@ Các biến thông dụng:
 | `SESSION_SECRET` | tự tạo | Secret session. Nếu bỏ trống, server tự tạo và lưu bền vững trong data directory. |
 | `SESSION_COOKIE_SECURE` | `false` | Đặt `true` khi dùng HTTPS đúng cách. |
 | `TRUST_PROXY` | `false` | Bật khi server đứng sau reverse proxy đáng tin cậy. |
-| `MESSAGE_WEBHOOK_URL` | rỗng | Webhook message mặc định. |
-| `GROUP_EVENT_WEBHOOK_URL` | rỗng | Webhook group event mặc định. |
-| `REACTION_WEBHOOK_URL` | rỗng | Webhook reaction mặc định. |
+| `MESSAGE_WEBHOOK_URL` | rỗng | Legacy fallback cho event message; không có trang cấu hình riêng trên Web UI. |
+| `GROUP_EVENT_WEBHOOK_URL` | rỗng | Legacy fallback cho group event; không có trang cấu hình riêng trên Web UI. |
+| `REACTION_WEBHOOK_URL` | rỗng | Legacy fallback cho reaction; không có trang cấu hình riêng trên Web UI. |
 | `DEBUG_HTTP` | `false` | Log HTTP chi tiết khi debug. |
 | `DEBUG_STARTUP` | `false` | Log startup chi tiết khi debug. |
 | `ENABLE_DEBUG_ENDPOINTS` | `false` | Bật endpoint debug quản trị. Không nên bật thường xuyên. |
@@ -144,7 +144,7 @@ Các dữ liệu quan trọng gồm:
 ├── history/groups/          # cache lịch sử nhóm
 ├── sessions/                # session quản trị
 ├── proxies.json             # danh sách proxy
-├── webhook-config.json      # webhook mặc định/theo account
+├── webhook-config.json      # webhook theo account + legacy fallback
 └── session-secret           # secret session nếu tự sinh
 ```
 
@@ -248,7 +248,7 @@ Khi có event:
 
 1. Server tìm tất cả webhook đang bật của `ownId` có đăng ký event đó.
 2. Event được gửi đến **tất cả URL phù hợp**, có deduplicate URL.
-3. Nếu ID không có webhook phù hợp đang bật, server mới fallback sang webhook mặc định từ environment/config cũ.
+3. Nếu ID không có webhook phù hợp đang bật, server vẫn có thể dùng legacy fallback từ environment/config cũ để giữ tương thích. Legacy fallback không còn có trang cấu hình riêng trên Web UI.
 
 Cấu hình được lưu tại `/app/data/webhook-config.json` theo format `version: 2`. File v1 cũ có ba URL cố định/account sẽ được migrate tự động sang entry tương thích khi load, không làm mất URL cũ. Nếu nhiều loại sự kiện cũ dùng cùng một URL, chúng được gom thành **một webhook đa sự kiện** để trang Quản lý Webhook không hiển thị ba thẻ trùng nhau.
 

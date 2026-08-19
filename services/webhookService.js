@@ -93,7 +93,7 @@ function compatibilityWebhookId(events) {
 
 function compatibilityWebhookName(events) {
   const normalized = orderedEvents(events);
-  if (normalized.length > 1) return 'Webhook mặc định (tương thích cũ)';
+  if (normalized.length > 1) return 'Webhook tương thích cũ';
   return `${EVENT_LABEL[normalized[0]] || 'Webhook'} (tương thích cũ)`;
 }
 
@@ -136,8 +136,10 @@ function buildCompatibilityWebhooks(assignments) {
     const preserveSource = sourceIds.size === 1
       && entries.every((entry) => entry.sourceId && sourceIds.has(entry.sourceId));
     const id = preserveSource ? [...sourceIds][0] : compatibilityWebhookId(events);
-    const name = preserveSource && sourceNames.size === 1
-      ? [...sourceNames][0]
+    const sourceName = sourceNames.size === 1 ? [...sourceNames][0] : '';
+    const legacyGeneratedName = sourceName === 'Webhook mặc định (tương thích cũ)';
+    const name = preserveSource && sourceName && !legacyGeneratedName
+      ? sourceName
       : compatibilityWebhookName(events);
     const createdAt = entries.map((entry) => entry.createdAt).filter(Boolean).sort()[0];
     const updatedAt = entries.map((entry) => entry.updatedAt).filter(Boolean).sort().at(-1);

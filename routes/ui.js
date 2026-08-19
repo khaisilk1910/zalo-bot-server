@@ -51,10 +51,8 @@ router.post('/zalo-login', async (req, res) => {
     }
 });
 
-// Hiển thị form cập nhật webhook URL
-router.get('/updateWebhookForm', (req, res) => {
-    res.render('updateWebhookForm');
-});
+// Legacy URL retained only as a redirect. The default-webhook page is no longer exposed.
+router.get('/updateWebhookForm', (_req, res) => res.redirect(302, './account-webhook-manager'));
 
 // Endpoint hiển thị tài liệu API
 router.get('/list', (req, res) => {
@@ -83,7 +81,7 @@ router.get('/accounts', (req, res) => {
     return res.render('accounts');
 });
 
-// Endpoint cập nhật 3 webhook URL
+// Legacy endpoint retained for backward compatibility with old clients; it is not exposed in the web UI.
 router.post('/updateWebhook', (req, res) => {
   const { messageWebhookUrl, groupEventWebhookUrl, reactionWebhookUrl } = req.body || {};
   const values = { messageWebhookUrl, groupEventWebhookUrl, reactionWebhookUrl };

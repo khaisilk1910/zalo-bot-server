@@ -7,10 +7,10 @@
       <h1 class="page-title">Webhook</h1>
       <p class="page-subtitle">Mỗi <strong>ID Tài Khoản</strong> có thể có nhiều Webhook độc lập. Một webhook có thể nhận tin nhắn, sự kiện nhóm, reaction hoặc nhiều loại cùng lúc.</p>
     </div>
-    <div class="actions" style="margin:0"><a class="btn btn-secondary" href="./updateWebhookForm">Webhook mặc định</a><button class="btn btn-primary" id="addAccountBtn" type="button">＋ Thêm ID tài khoản</button></div>
+    <div class="actions" style="margin:0"><button class="btn btn-primary" id="addAccountBtn" type="button">＋ Thêm ID tài khoản</button></div>
   </div>
 
-  <div class="notice notice-info">Nếu một ID có ít nhất một webhook phù hợp đang bật, sự kiện sẽ gửi đến <strong>tất cả</strong> webhook đó. Nếu không có webhook phù hợp, server mới dùng webhook mặc định từ biến môi trường/cấu hình cũ.</div>
+  <div class="notice notice-info">Mỗi ID có thể gửi cùng một sự kiện đến <strong>tất cả</strong> webhook phù hợp đang bật. Các webhook trùng URL sẽ chỉ nhận một lần cho mỗi sự kiện.</div>
 
   <section class="section grid" style="grid-template-columns:minmax(260px,340px) minmax(0,1fr);align-items:start" id="webhookLayout">
     <aside class="card">

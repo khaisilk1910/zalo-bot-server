@@ -1,6 +1,6 @@
 (() => {
   const prefix = (() => {
-    const markerPaths = ['/admin-login','/zalo-login','/accounts','/proxies','/account-webhook-manager','/messages','/list','/change-password','/user-management','/updateWebhookForm','/reset-password'];
+    const markerPaths = ['/admin-login','/zalo-login','/accounts','/proxies','/account-webhook-manager','/messages','/list','/change-password','/user-management','/reset-password'];
     const path = window.location.pathname;
     for (const marker of markerPaths) {
       const idx = path.lastIndexOf(marker);

@@ -1,3 +1,10 @@
+## 2026-08-18 - Bỏ trang Webhook mặc định
+
+- Bỏ nút/trang `Webhook mặc định` khỏi Web UI; URL cũ `/updateWebhookForm` nay chuyển thẳng về `/account-webhook-manager`.
+- Giữ endpoint POST legacy `/updateWebhook` cho client cũ, nhưng không còn hiển thị form dễ gây nhầm lẫn.
+- Đổi tên webhook tương thích tự sinh từ `Webhook mặc định (tương thích cũ)` thành `Webhook tương thích cũ`; cấu hình cũ sẽ được chuẩn hóa khi load.
+- Luồng gửi webhook theo ID, API v2 và API `/api/account-webhook*` không thay đổi.
+
 ## 2026-08-18 - Gom webhook tương thích cũ theo URL
 
 - Tự động gom các webhook `Tin nhắn`, `Sự kiện nhóm`, `Reaction` dạng tương thích cũ khi chúng dùng cùng một URL thành một webhook đa sự kiện duy nhất trên trang Quản lý Webhook.
